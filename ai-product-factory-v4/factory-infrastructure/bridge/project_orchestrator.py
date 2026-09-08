@@ -74,13 +74,40 @@ HANDOFF_NEXT = {
     "Analyst": "Normalize Analyst Result",
     "Planner": "Normalize Planner Result",
     "Consistency Reviewer": "Normalize Consistency Result",
+    "Cursor Developer": "Normalize Cursor Developer Result",
+    "Normalize Cursor Developer Result": "Deterministic QA Gate",
 }
 
 TERMINAL_FACTORY_NODES = frozenset({"Director Webhook Response", "Factory Telemetry Publisher"})
 
 
-def diagnosis_tr(summary: str, stage: str) -> str:
+def diagnosis_tr(summary: str, stage: str, result: dict[str, object] | None = None) -> str:
     text_value = summary.lower()
+    payload = result if isinstance(result, dict) else {}
+    report = payload.get("sprint_report") if isinstance(payload.get("sprint_report"), dict) else {}
+    selected = str(payload.get("developer_route") or payload.get("selected_developer") or "").upper()
+    failures = payload.get("technical_failures") if isinstance(payload.get("technical_failures"), list) else []
+    if not failures and isinstance(report, dict) and isinstance(report.get("technical_failures"), list):
+        failures = report["technical_failures"]
+    failed = {str(item.get("developer_route") or "").upper() for item in failures if isinstance(item, dict)}
+    outcomes = report.get("task_outcomes") if isinstance(report.get("task_outcomes"), list) else []
+    used = {str(item.get("developer") or "").upper() for item in outcomes if isinstance(item, dict) and item.get("developer")}
+    if int(report.get("laguna_developed_count") or 0) > 0:
+        used.add("LAGUNA")
+    failure_blob = json.dumps(failures, ensure_ascii=False).lower() if failures else ""
+    laguna_invoked = selected == "LAGUNA" or "LAGUNA" in used or "LAGUNA" in failed or "laguna" in text_value
+    rate_limited = any(token in f"{text_value} {failure_blob}" for token in ("rate limit", "rate_limit", "429", "too many requests"))
+    if laguna_invoked and rate_limited:
+        return "Laguna çağrıldı ancak sağlayıcı hız sınırına takıldı. Laguna yalnızca öneri üretebilir."
+    if laguna_invoked and (
+        "provider_not_found" in text_value
+        or "model_unavailable" in text_value
+        or "minimax" in text_value
+        or "LAGUNA" in failed
+    ):
+        return "MiniMax kullanılamadı. Laguna öneri üretici olarak çağrıldı; uygulanan dosya kanıtı üretmez."
+    if "cursor" in text_value and ("timeout" in text_value or "unauthenticated" in text_value or "unavailable" in text_value):
+        return "Cursor uygulayıcı teknik olarak tamamlanamadı. Codex yedek applied Developer yoluna düşülebilir."
     if "jsondecodeerror" in text_value or "non_json" in text_value or "empty_factory_response" in text_value:
         return "Product Factory geçerli bir JSON sonuç döndürmedi. Gönderim başlamış olabilir; webhook hata yolunda yanıt düğümüne ulaşmadı."
     if (
@@ -135,6 +162,8 @@ def diagnosis_tr(summary: str, stage: str) -> str:
         or "model_unavailable" in text_value
         or (stage in {"MiniMax Developer", "Developer Dispatcher", "Recovery Controller"} and "minimax" in text_value)
     ):
+        if laguna_invoked:
+            return "MiniMax kullanılamadı. Laguna öneri üretici olarak çağrıldı; uygulanan dosya kanıtı üretmez."
         return "MiniMax teknik olarak kullanılamaz hale geldikten sonra Developer fallback zinciri Laguna'ya devam etmedi."
     return sanitize_text(summary, 800)
 
@@ -163,6 +192,8 @@ def developer_chain_tr(summary: str, result: dict[str, object] | None = None) ->
     failed = {str(item.get("developer_route") or "").upper() for item in failures if isinstance(item, dict)}
     outcomes = report.get("task_outcomes") if isinstance(report.get("task_outcomes"), list) else []
     used = {str(item.get("developer") or "").upper() for item in outcomes if isinstance(item, dict) and item.get("developer")}
+    if int(report.get("cursor_developed_count") or 0) > 0:
+        used.add("CURSOR")
     if int(report.get("codex_developed_count") or 0) > 0:
         used.add("CODEX")
     if int(report.get("minimax_developed_count") or 0) > 0:
@@ -172,15 +203,16 @@ def developer_chain_tr(summary: str, result: dict[str, object] | None = None) ->
     blob = summary.lower()
 
     def one(name: str) -> str:
+        if name == "CURSOR" and (payload.get("cursor_available") is False or name in exclusions) and name not in used:
+            return "Kullanılamadı"
         if name == "CODEX" and (payload.get("codex_available") is False or name in exclusions) and name not in used:
             return "Kullanılamadı"
-        if name == "MINIMAX" and (
-            name in failed
-            or "provider_not_found" in blob
-            or "model_unavailable" in blob
-            or "unavailable for free" in blob
-        ) and name not in used:
-            return "Sağlayıcı bulunamadı"
+        if name == "MINIMAX":
+            if (name in failed or "provider_not_found" in blob or "model_unavailable" in blob or "unavailable for free" in blob) and name not in used:
+                return "Sağlayıcı bulunamadı"
+            if name in used or selected == name:
+                return "Seçildi"
+            return "Aktif değil"
         if name in used or selected == name:
             return "Seçildi"
         if name in exclusions or name in failed:
@@ -189,7 +221,7 @@ def developer_chain_tr(summary: str, result: dict[str, object] | None = None) ->
             return "Denenmedi"
         return "—"
 
-    return {"codex_tr": one("CODEX"), "minimax_tr": one("MINIMAX"), "laguna_tr": one("LAGUNA")}
+    return {"cursor_tr": one("CURSOR"), "codex_tr": one("CODEX"), "minimax_tr": one("MINIMAX"), "laguna_tr": one("LAGUNA")}
 
 
 def stuck_stage_tr(stage: str, summary: str, last_success: str = "") -> str:
@@ -211,6 +243,7 @@ def stuck_stage_tr(stage: str, summary: str, last_success: str = "") -> str:
         "Provider Failure Classifier": "Analyst sağlayıcı çağrısı",
         "Provider Failure Terminal": "Sağlayıcı zinciri sonu",
         "Developer Dispatcher": "Developer seçimi",
+        "Cursor Developer": "Cursor uygulayıcı",
         "MiniMax Developer": "Developer seçimi",
         "Recovery Controller": "Developer seçimi",
         "Factory Submission": "Factory gönderimi",
@@ -250,10 +283,11 @@ def build_diagnosis(state: dict[str, object], unit: dict[str, object], *, status
     chain = developer_chain_tr(summary, result)
     return {
         "summary": sanitize_text(summary, 800),
-        "summary_tr": diagnosis_tr(summary, stage),
+        "summary_tr": diagnosis_tr(summary, stage, result),
         "stage": stage,
         "stage_tr": stuck_stage_tr(stage, summary, last_success),
         "fallback_tr": fallback_status_tr(summary, stage, result),
+        "cursor_tr": chain["cursor_tr"],
         "codex_tr": chain["codex_tr"],
         "minimax_tr": chain["minimax_tr"],
         "laguna_tr": chain["laguna_tr"],
@@ -661,7 +695,10 @@ def package_work_unit(state: dict[str, object], unit: dict[str, object]) -> dict
         "forbidden_actions": definition["forbidden_actions"],
         "requested_target": target,
         "writer_target": target,
+        "cursor_available": True,
         "codex_available": True,
+        "minimax_available": False,
+        "laguna_available": True,
         "historical_execution_ids": list(unit.get("historical_execution_ids") or []),
         "context": {
             "product_summary": (plan.get("global_context") or plan["project_goal"])[:4_000],
@@ -837,19 +874,7 @@ def correlate_timeout(brief: dict[str, object]) -> dict[str, object] | None:
         blob = json.dumps(snapshot, ensure_ascii=False)[:20_000]
         if marker in blob or (sprint and sprint in blob):
             return snapshot
-    running = next(
-        (
-            row
-            for row in rows
-            if isinstance(row, dict)
-            and str(row.get("id") or "") not in history
-            and not execution_finished(row)
-        ),
-        None,
-    )
-    if not running:
-        return None
-    return n8n_execution_snapshot(str(running.get("id"))) or running
+    return None
 
 
 def last_executed_node(snapshot: dict[str, object]) -> str:
@@ -927,8 +952,10 @@ def parse_factory_payload(raw: bytes, headers: object = None) -> dict[str, objec
     try:
         value = json.loads(text)
         if isinstance(value, dict):
-            if execution_id and not value.get("execution_id"):
-                value["execution_id"] = execution_id
+            authoritative = value.get("factory_execution_id") or value.get("execution_id") or execution_id
+            if authoritative:
+                value["factory_execution_id"] = str(authoritative)
+                value["execution_id"] = str(authoritative)
             return value
         return {"transport_status": "FAILED", "reason": "factory_response_not_object", "factory_execution_id": execution_id}
     except json.JSONDecodeError:
@@ -1278,8 +1305,10 @@ def reset_unproven_transport_reviews(state: dict[str, object]) -> bool:
             continue
         history = list(unit.get("historical_execution_ids") or [])
         if unit.get("factory_execution_id"):
-            history.append(str(unit["factory_execution_id"]))
-        unit["historical_execution_ids"] = history[-8:]
+            eid = str(unit["factory_execution_id"])
+            if eid not in history:
+                history.append(eid)
+        unit["historical_execution_ids"] = history[-24:]
         ledger = list(unit.get("historical_attempt_ledger") or [])
         ledger.append({
             "attempts": int(unit.get("attempts") or 0),

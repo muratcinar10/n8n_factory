@@ -6,7 +6,7 @@ const path = require("path");
 const workflow = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, "../../AI-Product-Factory-V4-Production-Ready-V4.3.2-Infrastructure.json"), "utf8")
 );
-assert.equal(workflow.nodes.length, 61);
+assert.equal(workflow.nodes.length, 64);
 const b04 = JSON.parse(fs.readFileSync(path.resolve(__dirname, "../../AI-Product-Factory-V4-Codex-Executor-B04.json"), "utf8"));
 assert.equal(b04.id, "y5gVRIcXPvXoTQic");
 const names = workflow.nodes.map((n) => n.name);
@@ -27,6 +27,7 @@ function dest(route) {
   return workflow.connections["Developer Router"].main[routerKeys.indexOf(route)][0].node;
 }
 
+assert.equal(dest("CURSOR"), "Cursor Developer");
 assert.equal(dest("CODEX"), "Codex Executor");
 assert.equal(dest("MINIMAX"), "MiniMax Developer");
 assert.equal(dest("LAGUNA"), "Laguna Developer");
@@ -41,8 +42,8 @@ assert.equal(workflow.connections["Recovery Router"].main[1][0].node, "Developer
 assert.equal(workflow.connections["Laguna Developer"].main[1][0].node, "Laguna Failure Context");
 
 const candidates = [
-  { rank: 1, slot: "PRIMARY", provider: "CODEX", configured: false },
-  { rank: 2, slot: "FALLBACK_1", provider: "MINIMAX", configured: true },
+  { rank: 1, slot: "PRIMARY", provider: "CURSOR", configured: true },
+  { rank: 2, slot: "FALLBACK_1", provider: "CODEX", configured: true },
   { rank: 3, slot: "FALLBACK_2", provider: "LAGUNA", configured: true },
 ];
 
@@ -75,7 +76,7 @@ function baseState(overrides = {}) {
     current_task_id: "T01",
     current_task: current,
     developer_candidates: candidates,
-    developer_exclusions: ["CODEX"],
+    developer_exclusions: ["CURSOR", "CODEX"],
     developer_attempt_history: [
       {
         task_id: "T01",
@@ -137,25 +138,35 @@ async function run(node, incoming, prevName, extras = {}) {
   const consistencyContent = JSON.stringify({ status: "MATCH", valid_task_ids: ["T01"] });
 
   const extrasFirst = {
-    "Director Sprint Input": { body: { sprint_id: "S1", objective: "Create the Hangman shell", project_id: "PROJECT-HANGMAN-PILOT-001", work_unit_id: "W001", codex_available: true, minimax_available: true, laguna_available: true } },
+    "Director Sprint Input": { body: { sprint_id: "S1", objective: "Create the Hangman shell", project_id: "PROJECT-HANGMAN-PILOT-001", work_unit_id: "W001", cursor_available: true, codex_available: true, minimax_available: false, laguna_available: true } },
     "Normalize Analyst Result": { content: analystContent },
     "Normalize Specialist Result": { content: specialistContent },
     "Normalize Planner Result": { content: plannerContent },
   };
 
-  const codexOk = await run(dispatcher, { content: consistencyContent }, "Normalize Consistency Result", extrasFirst);
+  const cursorOk = await run(dispatcher, { content: consistencyContent }, "Normalize Consistency Result", extrasFirst);
+  assert.equal(cursorOk.developer_route, "CURSOR");
+  assert.notEqual(cursorOk.developer_route, "CODEX");
+  assert.notEqual(cursorOk.developer_route, "MINIMAX");
+  assert.notEqual(cursorOk.developer_route, "LAGUNA");
+
+  const extrasNoCursor = {
+    ...extrasFirst,
+    "Director Sprint Input": { body: { sprint_id: "S1", objective: "Create the Hangman shell", project_id: "PROJECT-HANGMAN-PILOT-001", work_unit_id: "W001", cursor_available: false, codex_available: true, minimax_available: true, laguna_available: true } },
+  };
+  const codexOk = await run(dispatcher, { content: consistencyContent }, "Normalize Consistency Result", extrasNoCursor);
   assert.equal(codexOk.developer_route, "CODEX");
   assert.notEqual(codexOk.developer_route, "MINIMAX");
   assert.notEqual(codexOk.developer_route, "LAGUNA");
 
-  const extrasNoCodex = {
+  const extrasLagunaOnly = {
     ...extrasFirst,
-    "Director Sprint Input": { body: { sprint_id: "S1", objective: "Create the Hangman shell", project_id: "PROJECT-HANGMAN-PILOT-001", work_unit_id: "W001", codex_available: false, minimax_available: true, laguna_available: true } },
+    "Director Sprint Input": { body: { sprint_id: "S1", objective: "Create the Hangman shell", project_id: "PROJECT-HANGMAN-PILOT-001", work_unit_id: "W001", cursor_available: false, codex_available: false, minimax_available: true, laguna_available: true } },
   };
-  const minimaxOk = await run(dispatcher, { content: consistencyContent }, "Normalize Consistency Result", extrasNoCodex);
-  assert.equal(minimaxOk.developer_route, "MINIMAX");
-  assert.notEqual(minimaxOk.developer_route, "LAGUNA");
-  assert.deepEqual(minimaxOk.acceptance_criteria || minimaxOk.current_task.acceptance_criteria, ["a"]);
+  const lagunaOnly = await run(dispatcher, { content: consistencyContent }, "Normalize Consistency Result", extrasLagunaOnly);
+  assert.equal(lagunaOnly.developer_route, "LAGUNA");
+  assert.notEqual(lagunaOnly.developer_route, "MINIMAX");
+  assert.deepEqual(lagunaOnly.acceptance_criteria || lagunaOnly.current_task.acceptance_criteria, ["a"]);
 
   const notFound = await run(
     normalize,
@@ -184,7 +195,7 @@ async function run(node, incoming, prevName, extras = {}) {
   assert.equal(afterNotFound.recovery_action, "TRY_ALTERNATE_DEVELOPER");
   assert.equal(afterNotFound.developer_route, "LAGUNA");
   assert.equal(afterNotFound.provider_chain_exhausted, false);
-  assert.deepEqual(afterNotFound.developer_exclusions, ["CODEX", "MINIMAX"]);
+  assert.deepEqual(afterNotFound.developer_exclusions, ["CURSOR", "CODEX", "MINIMAX"]);
   assert.equal(afterNotFound.tasks[0].status, "RETRY");
 
   const timeoutNorm = await run(
@@ -204,7 +215,7 @@ async function run(node, incoming, prevName, extras = {}) {
   assert.equal(afterTimeout.developer_route, "LAGUNA");
 
   const exhaustedState = baseState({
-    developer_exclusions: ["CODEX", "MINIMAX"],
+    developer_exclusions: ["CURSOR", "CODEX"],
     developer_attempt_history: [
       { task_id: "T01", underlying_task_key: "T01:create the hangman shell", provider: "LAGUNA", status: "DISPATCHED", meaningful_attempt: true },
     ],
@@ -232,7 +243,7 @@ async function run(node, incoming, prevName, extras = {}) {
   assert.notEqual(falseExhaust.developer_route, "SPRINT_END");
   assert.equal(falseExhaust.developer_route, "LAGUNA");
 
-  const lagunaDispatch = await run(dispatcher, afterNotFound, "Recovery Controller", extrasNoCodex);
+  const lagunaDispatch = await run(dispatcher, afterNotFound, "Recovery Controller", extrasLagunaOnly);
   assert.equal(lagunaDispatch.developer_route, "LAGUNA");
   assert.equal(lagunaDispatch.project_id, "PROJECT-HANGMAN-PILOT-001");
   assert.equal(lagunaDispatch.work_unit_id, "W001");
@@ -240,7 +251,7 @@ async function run(node, incoming, prevName, extras = {}) {
   assert.deepEqual(lagunaDispatch.constraints, ["c"]);
   assert.deepEqual(lagunaDispatch.acceptance_criteria, ["a"]);
 
-  const firstMeta = await run(dispatcher, { content: consistencyContent }, "Normalize Consistency Result", extrasNoCodex);
+  const firstMeta = await run(dispatcher, { content: consistencyContent }, "Normalize Consistency Result", extrasLagunaOnly);
   assert.equal(firstMeta.project_id, "PROJECT-HANGMAN-PILOT-001");
   assert.equal(firstMeta.work_unit_id, "W001");
   assert.deepEqual(firstMeta.requirements, ["r"]);
@@ -280,8 +291,8 @@ async function run(node, incoming, prevName, extras = {}) {
   assert.deepEqual(preserved.acceptance_criteria, ["a"]);
   assert.equal(preserved.selected_developer, "LAGUNA");
 
-  console.log("A Codex success: PASS");
-  console.log("B Codex unavailable MiniMax success path: PASS");
+  console.log("A Cursor success: PASS");
+  console.log("B Cursor unavailable Codex success path: PASS");
   console.log("C MiniMax PROVIDER_NOT_FOUND Laguna: PASS");
   console.log("D MiniMax timeout Laguna: PASS");
   console.log("E all Developers unavailable exhaustion: PASS");

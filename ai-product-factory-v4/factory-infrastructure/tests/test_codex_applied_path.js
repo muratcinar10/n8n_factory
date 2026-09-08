@@ -6,7 +6,7 @@ const path = require("path");
 const workflow = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, "../../AI-Product-Factory-V4-Production-Ready-V4.3.2-Infrastructure.json"), "utf8")
 );
-assert.equal(workflow.nodes.length, 61);
+assert.equal(workflow.nodes.length, 64);
 const b04 = JSON.parse(fs.readFileSync(path.resolve(__dirname, "../../AI-Product-Factory-V4-Codex-Executor-B04.json"), "utf8"));
 assert.equal(b04.id, "y5gVRIcXPvXoTQic");
 const executor = workflow.nodes.find((n) => n.name === "Codex Executor");
@@ -20,7 +20,7 @@ assert(buildJob.parameters.jsCode.includes("PRODUCTION:'/data/host-writer'"));
 assert(buildJob.parameters.jsCode.includes("SMOKE_FIXTURE:'/data/smoke-host-writer'"));
 assert(buildJob.parameters.jsCode.includes("job_path:`${queueRoot}/inbox/${id}.json`"));
 assert(dispatcher.parameters.jsCode.includes("writer_target:String(director.writer_target"));
-assert(qaGate.parameters.jsCode.includes("implementation_applied:developer==='CODEX'"));
+assert(qaGate.parameters.jsCode.includes("implementation_applied:['CODEX','CURSOR'].includes(developer)"));
 assert(qaGate.parameters.jsCode.includes("NON_CODEX_PROPOSAL_NOT_APPLIED"));
 
 async function run(node, incoming, prevName, extras = {}) {
@@ -85,15 +85,31 @@ const hangmanBody = {
   work_unit_id: "W001",
   writer_target: "PRODUCTION",
   requested_target: "PRODUCTION",
+  cursor_available: true,
   codex_available: true,
-  minimax_available: true,
+  minimax_available: false,
   laguna_available: true,
 };
 
 (async () => {
   const consistency = { content: JSON.stringify({ status: "MATCH", valid_task_ids: ["T01"] }) };
 
-  const approved = await run(dispatcher, consistency, "Normalize Consistency Result", planningExtras(hangmanBody));
+  const approvedCursor = await run(dispatcher, consistency, "Normalize Consistency Result", planningExtras(hangmanBody));
+  assert.equal(approvedCursor.developer_route, "CURSOR");
+  assert.notEqual(approvedCursor.developer_route, "CODEX");
+  assert.notEqual(approvedCursor.developer_route, "MINIMAX");
+  assert.notEqual(approvedCursor.developer_route, "LAGUNA");
+  assert.equal(approvedCursor.writer_target, "PRODUCTION");
+  assert.equal(approvedCursor.project_id, "PROJECT-HANGMAN-PILOT-001");
+  assert.equal(approvedCursor.work_unit_id, "W001");
+  console.log("A Approved project Cursor primary: PASS");
+
+  const approved = await run(
+    dispatcher,
+    consistency,
+    "Normalize Consistency Result",
+    planningExtras({ ...hangmanBody, cursor_available: false, minimax_available: true })
+  );
   assert.equal(approved.developer_route, "CODEX");
   assert.notEqual(approved.developer_route, "MINIMAX");
   assert.notEqual(approved.developer_route, "LAGUNA");
@@ -101,8 +117,7 @@ const hangmanBody = {
   assert.equal(approved.writer_target, "PRODUCTION");
   assert.equal(approved.project_id, "PROJECT-HANGMAN-PILOT-001");
   assert.equal(approved.work_unit_id, "W001");
-  console.log("A Approved project Codex available: PASS");
-  console.log("C Codex first selection: PASS");
+  console.log("C Codex second selection: PASS");
 
   const blockedTarget = await run(safety, {
     ...approved,
@@ -144,12 +159,39 @@ const hangmanBody = {
     dispatcher,
     consistency,
     "Normalize Consistency Result",
-    planningExtras({ ...hangmanBody, codex_available: false })
+    planningExtras({ ...hangmanBody, cursor_available: false, codex_available: false, minimax_available: true })
   );
-  assert.equal(unavailable.developer_route, "MINIMAX");
+  assert.equal(unavailable.developer_route, "LAGUNA");
   assert.notEqual(unavailable.developer_route, "CODEX");
-  assert.notEqual(unavailable.developer_route, "LAGUNA");
-  console.log("E Codex unavailable MiniMax fallback: PASS");
+  assert.notEqual(unavailable.developer_route, "MINIMAX");
+  console.log("E Cursor and Codex unavailable Laguna fallback: PASS");
+
+  const cursorIncoming = {
+    ...approvedCursor,
+    executor_kind: "CURSOR",
+    execution_status: "SUCCESS",
+    ok: true,
+    task_completed: true,
+    cursor_exit_code: 0,
+    implementation_applied: true,
+    changed_files: ["index.html"],
+    new_files: [],
+    deleted_files: [],
+    summary: "Created the Hangman shell.",
+    tests: ["renders"],
+    test_outputs: ["0"],
+    runtime_evidence: ["index.html contains an HTML document"],
+  };
+  const qaCursor = await run(qaGate, cursorIncoming, "Normalize Cursor Developer Result", {
+    "Developer Dispatcher": approvedCursor,
+    "Normalize Non-Codex Developer Result": {},
+  });
+  assert.equal(qaCursor.qa_result.developer, "CURSOR");
+  assert.equal(qaCursor.qa_result.developer_completed, true);
+  assert.equal(qaCursor.qa_result.implementation_applied, true);
+  assert.deepEqual(qaCursor.qa_result.changed_files, ["index.html"]);
+  assert(!qaCursor.qa_result.missing_evidence.includes("NON_CODEX_PROPOSAL_NOT_APPLIED"));
+  console.log("D Cursor applied evidence reaches QA: PASS");
 
   const appliedIncoming = {
     ...approved,

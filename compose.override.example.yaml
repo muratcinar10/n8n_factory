@@ -5,6 +5,7 @@ services:
       - "127.0.0.1:5678:5678"
     environment:
       - N8N_RESTRICT_FILE_ACCESS_TO=/data/host-writer;/data/factory-monitor
+      - FACTORY_CURSOR_BRIDGE_TOKEN=${FACTORY_CURSOR_BRIDGE_TOKEN:-}
     volumes:
       - ./host-writer-runtime/inbox:/data/host-writer/inbox
       - ./host-writer-runtime/results:/data/host-writer/results:ro

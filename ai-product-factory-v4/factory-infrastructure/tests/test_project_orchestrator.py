@@ -248,7 +248,9 @@ class OrchestratorTests(unittest.TestCase):
         brief = orchestrator.package_work_unit(state, state["work_units"][0])
         self.assertEqual("PRODUCTION", brief["requested_target"])
         self.assertEqual("PRODUCTION", brief["writer_target"])
+        self.assertTrue(brief["cursor_available"])
         self.assertTrue(brief["codex_available"])
+        self.assertFalse(brief["minimax_available"])
         self.assertEqual("W001", brief["work_unit_id"])
         self.assertNotIn("workflow_id", json.dumps(brief))
         self.assertNotIn("filesystem_path", json.dumps(brief))
@@ -611,6 +613,28 @@ class OrchestratorTests(unittest.TestCase):
         )
         self.assertEqual("Seçildi", selected["laguna_tr"])
         self.assertIn("Laguna'ya devam etmedi", orchestrator.diagnosis_tr("provider_not_found", "Developer Dispatcher"))
+        self.assertIn(
+            "hız sınırına",
+            orchestrator.diagnosis_tr(
+                "rate limit",
+                "Laguna Developer",
+                {
+                    "developer_route": "LAGUNA",
+                    "technical_failures": [{"developer_route": "LAGUNA", "failure_type": "RATE_LIMIT", "message": "429"}],
+                },
+            ),
+        )
+        self.assertNotIn(
+            "Laguna'ya devam etmedi",
+            orchestrator.diagnosis_tr(
+                "rate limit",
+                "Laguna Developer",
+                {
+                    "developer_route": "LAGUNA",
+                    "technical_failures": [{"developer_route": "LAGUNA", "failure_type": "RATE_LIMIT"}],
+                },
+            ),
+        )
         self.assertEqual("Developer seçimi", orchestrator.stuck_stage_tr("Recovery Controller", "PROVIDER_NOT_FOUND", "MiniMax Developer"))
         self.assertIn("öneri üretebilir", orchestrator.diagnosis_tr("Codex unavailable", "Codex Executor"))
 

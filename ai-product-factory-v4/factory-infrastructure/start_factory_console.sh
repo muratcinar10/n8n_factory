@@ -40,5 +40,8 @@ start_service() {
 
 start_service director-bridge "$BASE_DIR/bridge/director_bridge.py"
 start_service factory-monitor "$BASE_DIR/monitor/factory_monitor.py"
+FACTORY_BRIDGE_TOKEN="$BRIDGE_TOKEN" start_service cursor-developer-bridge "$BASE_DIR/bridge/cursor_developer_bridge.py"
+printf 'FACTORY_CURSOR_BRIDGE_TOKEN=%s\n' "$BRIDGE_TOKEN" > "$RUNTIME_DIR/n8n-cursor.env"
+echo "Cursor Developer Bridge:             http://127.0.0.1:8766"
 echo "Director Control + Factory Monitor: http://127.0.0.1:${FACTORY_MONITOR_PORT}"
 echo "Director Bridge backend:            http://127.0.0.1:8765"

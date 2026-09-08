@@ -20,6 +20,7 @@ function renderDiagnosis(state){
   $('diag-status').textContent=labelStatus(problem.status);
   $('diag-stage').textContent=text(d.stage_tr||d.stage);
   $('diag-fallback').textContent=text(d.fallback_tr,'—');
+  $('diag-cursor').textContent=text(d.cursor_tr,'—');
   $('diag-codex').textContent=text(d.codex_tr,'—');
   $('diag-minimax').textContent=text(d.minimax_tr,'—');
   $('diag-laguna').textContent=text(d.laguna_tr,'—');

@@ -10,6 +10,7 @@ __pycache__/
 *.pyc
 factory-infrastructure/bridge/audit/*.json
 factory-infrastructure/monitor/telemetry/latest.json
+ai-product-factory-v4/factory-infrastructure/workspaces/
 host-writer-runtime/
 host-writer-state/
 n8n_storage/

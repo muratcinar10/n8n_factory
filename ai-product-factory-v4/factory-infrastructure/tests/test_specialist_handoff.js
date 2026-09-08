@@ -6,7 +6,7 @@ const path = require("path");
 const workflow = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, "../../AI-Product-Factory-V4-Production-Ready-V4.3.2-Infrastructure.json"), "utf8")
 );
-assert.equal(workflow.nodes.length, 61);
+assert.equal(workflow.nodes.length, 64);
 const b04 = JSON.parse(fs.readFileSync(path.resolve(__dirname, "../../AI-Product-Factory-V4-Codex-Executor-B04.json"), "utf8"));
 assert.equal(b04.id, "y5gVRIcXPvXoTQic");
 const names = workflow.nodes.map((n) => n.name);

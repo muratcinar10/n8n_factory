@@ -108,6 +108,7 @@ class MonitorTests(unittest.TestCase):
         self.assertIn("SORUN DETAYI", html)
         self.assertIn("Fallback", html)
         self.assertIn("diag-fallback", html)
+        self.assertIn("diag-cursor", html)
         self.assertIn("diag-codex", html)
         self.assertIn("diag-minimax", html)
         self.assertIn("diag-laguna", html)
@@ -149,25 +150,35 @@ class SecurityAndRegressionTests(unittest.TestCase):
         self.assertIn("control_plane_mutation_allowed", inspector["parameters"]["jsCode"])
         self.assertIn("false", inspector["parameters"]["jsCode"])
 
-    def test_37_node_61_is_telemetry_publisher(self):
+    def test_37_node_64_includes_telemetry_publisher(self):
         workflow = json.loads((REPO / "AI-Product-Factory-V4-Production-Ready-V4.3.2-Infrastructure.json").read_text())
-        self.assertEqual(61, len(workflow["nodes"]))
+        self.assertEqual(64, len(workflow["nodes"]))
         self.assertTrue(any(node["name"] == "Factory Telemetry Publisher" for node in workflow["nodes"]))
+        self.assertTrue(any(node["name"] == "Cursor Developer" for node in workflow["nodes"]))
 
     def test_38_deterministic_qa_name_preserved(self):
         workflow = json.loads((REPO / "AI-Product-Factory-V4-Production-Ready-V4.3.2-Infrastructure.json").read_text())
         self.assertTrue(any(node["name"] == "Deterministic QA Gate" for node in workflow["nodes"]))
 
-    def test_39_developer_order_codex_minimax_laguna(self):
+    def test_39_developer_order_cursor_codex_laguna(self):
         workflow = json.loads((REPO / "AI-Product-Factory-V4-Production-Ready-V4.3.2-Infrastructure.json").read_text())
         names = [node["name"] for node in workflow["nodes"]]
-        self.assertLess(names.index("Codex Executor"), names.index("MiniMax Developer"))
-        self.assertLess(names.index("MiniMax Developer"), names.index("Laguna Developer"))
+        self.assertIn("Cursor Developer", names)
+        self.assertIn("MiniMax Developer", names)
+        router = next(node for node in workflow["nodes"] if node["name"] == "Developer Router")
+        keys = [rule["outputKey"] for rule in router["parameters"]["rules"]["values"]]
+        self.assertEqual(keys[:4], ["CURSOR", "CODEX", "MINIMAX", "LAGUNA"])
+        self.assertEqual(workflow["connections"]["Developer Router"]["main"][0][0]["node"], "Cursor Developer")
+        self.assertEqual(workflow["connections"]["Developer Router"]["main"][1][0]["node"], "Codex Executor")
+        self.assertEqual(workflow["connections"]["Developer Router"]["main"][2][0]["node"], "MiniMax Developer")
+        self.assertEqual(workflow["connections"]["Developer Router"]["main"][3][0]["node"], "Laguna Developer")
         dispatcher = next(node for node in workflow["nodes"] if node["name"] == "Developer Dispatcher")
         code = dispatcher["parameters"]["jsCode"]
+        self.assertIn("CURSOR", code)
         self.assertIn("CODEX", code)
         self.assertIn("MINIMAX", code)
         self.assertIn("LAGUNA", code)
+        self.assertIn("MINIMAX:false", code)
 
     def test_40_provider_routing_roles_preserved(self):
         workflow = json.loads((REPO / "AI-Product-Factory-V4-Production-Ready-V4.3.2-Infrastructure.json").read_text())

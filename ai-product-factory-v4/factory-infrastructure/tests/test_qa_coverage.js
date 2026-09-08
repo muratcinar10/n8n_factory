@@ -9,7 +9,7 @@ const {
 const workflow = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, "../../AI-Product-Factory-V4-Production-Ready-V4.3.2-Infrastructure.json"), "utf8")
 );
-assert.equal(workflow.nodes.length, 61);
+assert.equal(workflow.nodes.length, 64);
 const qaGate = workflow.nodes.find((n) => n.name === "Deterministic QA Gate").parameters.jsCode;
 const leadCode = workflow.nodes.find((n) => n.name === "Normalize QA Lead Result").parameters.jsCode;
 const leadPrompt = workflow.nodes.find((n) => n.name === "QA Lead").parameters.jsonBody;
