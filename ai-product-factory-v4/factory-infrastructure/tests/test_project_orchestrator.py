@@ -468,6 +468,13 @@ class OrchestratorTests(unittest.TestCase):
         tr = orchestrator.diagnosis_tr(summary, "Normalize Specialist Result")
         self.assertIn("beklenen geçiş", tr)
 
+    def test_specialist_constraint_diagnosis_is_turkish(self):
+        tr = orchestrator.diagnosis_tr(
+            "SPECIALIST_INVALID_CONTRACT: constraints disappeared: The final result must be a complete playable browser application.",
+            "Normalize Specialist Result",
+        )
+        self.assertIn("devralınan kısıtlar", tr)
+
     def test_n8n_success_is_not_done_without_terminal_contract(self):
         status, _summary = orchestrator.classify_result({
             "sprint_report": {"status": "COMPLETED", "qa_result": "PASS", "qa_lead_result": "QA_APPROVED", "skipped_or_deferred_tasks": []},
