@@ -15,6 +15,11 @@ async function run(state,executed=[]){const global={};const context={$input:{fir
   const weak=(await run({sprint_id:'S3',sprint_report:{sprint_id:'S3'},tasks:[{...goodTask,status:'DEFERRED',deterministic_qa_verdict:'FAIL',qa_lead_status:'QA_INCOMPLETE',developer_attempts:3}],technical_failures:[{failed_node:'Planner'}],REVIEW_BACKLOG:[{kind:'QA_CRITICAL_FAILURE'}],recovery_restart_count:2})).state.factory_inspector;
   assert(weak.sprint_score<good.sprint_score);assert.equal(weak.health_band,'INVESTIGATE');assert.equal(weak.control_plane_mutation_allowed,false);
   assert.equal(workflow.nodes.length,61);assert.equal(workflow.active,false);
-  const qa=workflow.nodes.find(n=>n.name==='Deterministic QA Gate').parameters.jsCode;const source=JSON.parse(fs.readFileSync(path.resolve(__dirname,'../../AI-Product-Factory-V4-Production-Ready-V4.3.2.json'),'utf8'));assert.equal(qa,source.nodes.find(n=>n.name==='Deterministic QA Gate').parameters.jsCode);
+  const qa=workflow.nodes.find(n=>n.name==='Deterministic QA Gate').parameters.jsCode;
+  assert(qa.includes('coverage_matrix'));
+  assert(qa.includes('NON_CODEX_PROPOSAL_NOT_APPLIED'));
+  const lead=workflow.nodes.find(n=>n.name==='Normalize QA Lead Result').parameters.jsCode;
+  assert(lead.includes('auditQaCoverage'));
+  assert(lead.includes('qa_passes_rejected_for_insufficient_evidence'));
   console.log('Inspector deterministic fixtures: PASS');
 })().catch(error=>{console.error(error);process.exit(1)});
