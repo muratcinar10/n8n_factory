@@ -1,0 +1,11 @@
+# Sanitized local-only example. Replace paths with local values outside Git.
+services:
+  n8n:
+    ports:
+      - "127.0.0.1:5678:5678"
+    environment:
+      - N8N_RESTRICT_FILE_ACCESS_TO=/data/host-writer;/data/factory-monitor
+    volumes:
+      - ./host-writer-runtime/inbox:/data/host-writer/inbox
+      - ./host-writer-runtime/results:/data/host-writer/results:ro
+      - ./ai-product-factory-v4/factory-infrastructure/monitor/telemetry:/data/factory-monitor

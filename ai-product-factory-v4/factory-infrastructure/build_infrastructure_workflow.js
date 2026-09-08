@@ -1,0 +1,58 @@
+#!/usr/bin/env node
+const fs=require('fs');
+const path=require('path');
+const base=path.resolve(__dirname,'..');
+const source=path.join(base,'AI-Product-Factory-V4-Production-Ready-V4.3.2.json');
+const output=path.join(base,'AI-Product-Factory-V4-Production-Ready-V4.3.2-Infrastructure.json');
+const w=JSON.parse(fs.readFileSync(source,'utf8'));
+if(w.nodes.length!==59||w.active!==false)throw new Error('unexpected parent baseline');
+if(w.nodes.some(n=>n.name==='Factory Inspector'||n.name==='Factory Telemetry Publisher'))throw new Error('infrastructure nodes already exist');
+const inventory=[...w.nodes.map(n=>n.name),'Factory Inspector','Factory Telemetry Publisher'];
+const inspectorCode=`const s=$input.first().json||{};
+const tasks=Array.isArray(s.tasks)?s.tasks:[];
+const clamp=n=>Math.max(0,Math.min(1,Number(n)||0));
+const ratio=(yes,total)=>total>0?clamp(yes/total):null;
+const dimensions={};
+function dimension(name,weight,value,evidence){const observed=value!==null&&Number.isFinite(value);dimensions[name]={weight,status:observed?'OBSERVED':'NOT_OBSERVED',earned:observed?Math.round(weight*clamp(value)):0,evidence};}
+const qaObserved=tasks.filter(t=>t.deterministic_qa_verdict||t.qa_status);const qaPassed=qaObserved.filter(t=>String(t.deterministic_qa_verdict||t.qa_status).toUpperCase()==='PASS').length;
+dimension('task_correctness',35,ratio(qaPassed,qaObserved.length),{passed:qaPassed,observed:qaObserved.length});
+const leadObserved=tasks.filter(t=>t.qa_lead_status);const leadPassed=leadObserved.filter(t=>String(t.qa_lead_status).toUpperCase()==='QA_APPROVED').length;
+dimension('downstream_acceptance',20,ratio(leadPassed,leadObserved.length),{approved:leadPassed,observed:leadObserved.length});
+const violations=[...(s.REVIEW_BACKLOG||[])].filter(x=>String(x.kind||'').includes('CRITICAL')).length+tasks.flatMap(t=>t.qa_hard_failures||[]).filter(x=>/SECURITY|SECRET|SCOPE|CONSTRAINT/.test(String(x))).length;
+dimension('constraint_compliance',15,tasks.length?clamp(1-violations/Math.max(1,tasks.length)):null,{violations,tasks:tasks.length});
+const completed=tasks.filter(t=>String(t.status).toUpperCase()==='COMPLETED');const firstPass=completed.filter(t=>Number(t.developer_attempts||t.attempt||1)<=1).length;
+dimension('first_pass_success',10,ratio(firstPass,completed.length),{first_pass:firstPass,completed:completed.length});
+const failures=Array.isArray(s.technical_failures)?s.technical_failures.length:0;dimension('reliability',10,tasks.length?clamp(1-failures/Math.max(1,tasks.length)):null,{technical_failures:failures,tasks:tasks.length});
+const attempts=tasks.map(t=>Number(t.developer_attempts||t.attempt||0)).filter(n=>n>0);const avgAttempts=attempts.length?attempts.reduce((a,b)=>a+b,0)/attempts.length:null;
+dimension('efficiency',10,avgAttempts===null?null:clamp((4-avgAttempts)/3),{average_developer_attempts:avgAttempts});
+const sprintScore=Object.values(dimensions).reduce((sum,d)=>sum+d.earned,0);const health=sprintScore>=80?'HEALTHY':sprintScore>=60?'WATCH':'INVESTIGATE';
+const roleResults=s.provider_role_results||{};const roleScores={};
+for(const role of ['ANALYST','SPECIALIST','PLANNER','CONSISTENCY_REVIEWER']){const r=roleResults[role]||roleResults[role.toLowerCase()]||null;roleScores[role]=r?{score:r.provider_chain_exhausted?0:100,status:'OBSERVED',provider:r.selected_provider||null,model:r.selected_model||null}:{score:null,status:'NOT_OBSERVED'};}
+roleScores.DEVELOPER=tasks.length?{score:Math.round(100*(completed.length/Math.max(1,tasks.length))),status:'OBSERVED'}:{score:null,status:'NOT_OBSERVED'};
+roleScores.DETERMINISTIC_QA=qaObserved.length?{score:Math.round(100*qaPassed/qaObserved.length),status:'OBSERVED'}:{score:null,status:'NOT_OBSERVED'};
+roleScores.QA_LEAD=leadObserved.length?{score:Math.round(100*leadPassed/leadObserved.length),status:'OBSERVED'}:{score:null,status:'NOT_OBSERVED'};
+const observedRoles=Object.entries(roleScores).filter(([,v])=>v.status==='OBSERVED');const weakest=observedRoles.sort((a,b)=>a[1].score-b[1].score)[0]?.[0]||'INSUFFICIENT_EVIDENCE';
+const recommendations=[];if(dimensions.task_correctness.earned<28)recommendations.push('REVIEW_CONTRACT');if(dimensions.reliability.earned<8)recommendations.push('INVESTIGATE_PROVIDER');if(weakest!=='INSUFFICIENT_EVIDENCE')recommendations.push('INVESTIGATE_STAGE:'+weakest);
+const inspector={schema_version:1,sprint_id:String(s.sprint_id||s.sprint_report?.sprint_id||'UNKNOWN'),sprint_score:sprintScore,health_band:health,dimensions,role_scores:roleScores,weakest_link:weakest,first_pass_rate:completed.length?firstPass/completed.length:null,retry_recovery_count:Number(s.recovery_restart_count||0),technical_failure_count:failures,constraint_violations:violations,qa_acceptance_evidence:{passed:qaPassed,observed:qaObserved.length},qa_lead_acceptance_evidence:{approved:leadPassed,observed:leadObserved.length},recommendations:[...new Set(recommendations)],control_plane_mutation_allowed:false};
+const global=$getWorkflowStaticData('global');const previous=Array.isArray(global.factory_inspector_history)?global.factory_inspector_history:[];const history=[...previous.filter(x=>x.sprint_id!==inspector.sprint_id),{sprint_id:inspector.sprint_id,sprint_score:sprintScore,health_band:health,role_scores:roleScores,completed_at:new Date().toISOString()}].slice(-5);global.factory_inspector_history=history;
+const rollingScore=history.length?Math.round(history.reduce((a,x)=>a+Number(x.sprint_score||0),0)/history.length):sprintScore;const rollingBand=rollingScore>=80?'HEALTHY':rollingScore>=60?'WATCH':'INVESTIGATE';const roleBuckets={};for(const h of history)for(const [r,v] of Object.entries(h.role_scores||{}))if(Number.isFinite(v.score))(roleBuckets[r]||=[]).push(v.score);const rollingWeakest=Object.entries(roleBuckets).map(([r,v])=>[r,v.reduce((a,b)=>a+b,0)/v.length]).sort((a,b)=>a[1]-b[1])[0]?.[0]||'INSUFFICIENT_EVIDENCE';inspector.rolling_factory_score=rollingScore;inspector.rolling_health_band=rollingBand;inspector.rolling_weakest_role=rollingWeakest;inspector.rolling_sprint_count=history.length;
+const names=${JSON.stringify(inventory)};const failureNodes=new Set((s.technical_failures||[]).map(f=>String(f.failed_node||f.provider||'')));const fallback=/Fallback|Alternate|MiniMax Developer|Laguna Developer/;const now=new Date().toISOString();
+function executed(name){try{return $(name).isExecuted===true}catch{return false}}
+const nodes=names.map(name=>{let status='WAITING',activity='Not invoked in the current sprint.';if(failureNodes.has(name)){status='FAILED';activity='A recorded technical failure occurred at this stage.';}else if(name==='Factory Inspector'){status='COMPLETED';activity='Calculated evidence-backed sprint health without changing factory control settings.';}else if(name==='Factory Telemetry Publisher'){status='COMPLETED';activity='Published this allowlisted read-only telemetry snapshot.';}else if(executed(name)){status='COMPLETED';activity='Stage completed in the current sprint execution.';}else if(fallback.test(name)){status='SKIPPED';activity='Fallback was not invoked in the current sprint.';}return {name,status,activity,updated_at:status==='WAITING'||status==='SKIPPED'?now:now};});
+const telemetry={schema_version:1,factory_status:'COMPLETED',sprint_id:inspector.sprint_id,current_stage:'Factory Telemetry Publisher',started_at:s.started_at||null,updated_at:now,project:{project_id:s.project_id||s.director_brief?.project_id||null,project_title:s.product_identity||s.director_brief?.product_identity||null,status:'RUNNING',done:null,total:null,current_work_unit_id:s.work_unit_id||s.director_brief?.work_unit_id||null,current_work_unit_title:s.director_brief?.sprint_title||null,updated_at:now},progress:{completed:nodes.filter(n=>n.status==='COMPLETED').length,total:nodes.length},inspector,nodes};
+const state={...s,factory_inspector:inspector,sprint_report:{...s.sprint_report,factory_inspector:inspector},monitor_telemetry:telemetry};return [{json:state,binary:{data:{data:Buffer.from(JSON.stringify(telemetry,null,2)+'\\n','utf8').toString('base64'),mimeType:'application/json',fileName:'latest.json'}}}];`;
+const inspector={parameters:{mode:'runOnceForAllItems',jsCode:inspectorCode},type:'n8n-nodes-base.code',typeVersion:2,position:[2200,540],id:'2e28632a-6c93-4dc0-b44f-fdbb8f0ac060',name:'Factory Inspector'};
+const publisher={parameters:{operation:'write',fileName:'/data/factory-monitor/latest.json',options:{}},type:'n8n-nodes-base.readWriteFile',typeVersion:1,position:[2420,540],id:'6f186438-a2e1-487a-a911-907a933e4061',name:'Factory Telemetry Publisher'};
+w.nodes.push(inspector,publisher);
+const stateOut=w.connections['Lesson Output Router'].main[0];
+if(!stateOut.some(x=>x.node==='Persist Review Backlog'))throw new Error('expected persistence connection missing');
+w.connections['Lesson Output Router'].main[0]=stateOut.map(x=>x.node==='Persist Review Backlog'?{...x,node:'Factory Inspector'}:x);
+w.connections['Factory Inspector']={main:[[{node:'Factory Telemetry Publisher',type:'main',index:0}]]};
+w.connections['Factory Telemetry Publisher']={main:[[{node:'Persist Review Backlog',type:'main',index:0}]]};
+const history=w.nodes.find(n=>n.name==='Persist Sprint History');
+history.parameters.columns.value.payload_json="={{ JSON.stringify($('Factory Inspector').first().json.sprint_report) }}";
+w.active=false;
+fs.writeFileSync(output,JSON.stringify(w,null,2)+'\n');
+const initialTelemetry={schema_version:1,factory_status:'WAITING',sprint_id:null,current_stage:null,started_at:null,updated_at:null,inspector:null,nodes:inventory.map(name=>({name,status:/Fallback|Alternate|MiniMax Developer|Laguna Developer/.test(name)?'SKIPPED':'WAITING',activity:/Fallback|Alternate|MiniMax Developer|Laguna Developer/.test(name)?'No sprint observed; fallback not invoked.':'No sprint telemetry observed.',updated_at:null}))};
+fs.writeFileSync(path.join(__dirname,'monitor','telemetry','latest.json'),JSON.stringify(initialTelemetry,null,2)+'\n');
+console.log(output);

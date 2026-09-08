@@ -1,0 +1,54 @@
+{
+  "schema_version": "1.0",
+  "project_id": "PROJECT-SYNTHETIC-001",
+  "project_name": "Sentetik Orchestrator Testi",
+  "project_goal": "Gerçek ürün oluşturmadan bağımlılık sırasını doğrulamak.",
+  "global_context": {
+    "summary": "Yalnız çevrimdışı testlerde kullanılan sentetik plan.",
+    "architecture": "Üç küçük ve sıralı doğrulama birimi.",
+    "constraints": ["Yalnız sentetik kanıt kullan"],
+    "forbidden_actions": ["Market Intelligence erişimi yok", "Host Writer işi yok", "Credential erişimi yok"],
+    "completion_criteria": ["Üç birim doğru sırada deterministik terminal duruma ulaşır"]
+  },
+  "work_units": [
+    {
+      "work_unit_id": "W001",
+      "title": "Sözleşmeyi Doğrula",
+      "objective": "Plan sözleşmesini çevrimdışı doğrula.",
+      "context": "Gerçek yürütme yapmayan sentetik fixture.",
+      "dependencies": [],
+      "allowed_scope": ["sandbox/W001.txt"],
+      "forbidden_scope": ["protected.txt"],
+      "acceptance_criteria": ["Sözleşme kabul edilir"],
+      "test_requirements": ["Çevrimdışı birim testi"],
+      "expected_artifacts": ["sandbox/W001.txt"],
+      "priority": 1
+    },
+    {
+      "work_unit_id": "W002",
+      "title": "Bağımlılığı Doğrula",
+      "objective": "W001 tamamlanmadan seçilmediğini doğrula.",
+      "context": "W001 sonucuna bağlı sentetik fixture.",
+      "dependencies": ["W001"],
+      "allowed_scope": ["sandbox/W002.txt"],
+      "forbidden_scope": ["protected.txt"],
+      "acceptance_criteria": ["W002, W001'den önce seçilmez"],
+      "test_requirements": ["Çevrimdışı sıra testi"],
+      "expected_artifacts": ["sandbox/W002.txt"],
+      "priority": 2
+    },
+    {
+      "work_unit_id": "W003",
+      "title": "Sonucu Doğrula",
+      "objective": "Terminal proje sınıflandırmasını doğrula.",
+      "context": "W002 sonucuna bağlı sentetik fixture.",
+      "dependencies": ["W002"],
+      "allowed_scope": ["sandbox/W003.txt"],
+      "forbidden_scope": ["protected.txt"],
+      "acceptance_criteria": ["Proje doğru terminal duruma ulaşır"],
+      "test_requirements": ["Çevrimdışı sonuç testi"],
+      "expected_artifacts": ["sandbox/W003.txt"],
+      "priority": 3
+    }
+  ]
+}

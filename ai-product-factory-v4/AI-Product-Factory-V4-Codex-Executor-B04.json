@@ -1,0 +1,512 @@
+{
+  "updatedAt": "2026-09-05T21:42:11.211Z",
+  "createdAt": "2026-09-05T15:50:14.078Z",
+  "id": "y5gVRIcXPvXoTQic",
+  "name": "AI Product Factory V4 — Codex Executor",
+  "description": null,
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -4256,
+        576
+      ],
+      "id": "dd7d9da8-6934-45f8-95b6-05665dda82a9",
+      "name": "Codex Task Input"
+    },
+    {
+      "parameters": {
+        "jsCode": "const s=$input.first().json;const task=s.current_task||{};const text=String(task.objective||'')+' '+String(task.expected_result||'');const critical=/(production\\s+(deploy|deployment|database)|payment\\s+config|credential|secret|api\\s*key|private\\s*key|destructive|drop\\s+table|truncate|production\\s+database|migration\\s*write)/i;const rawTarget=s.writer_target??s.director_brief?.writer_target;const writerTarget=typeof rawTarget==='string'?rawTarget:'';const targetAllowed=writerTarget==='PRODUCTION'||writerTarget==='SMOKE_FIXTURE';const safe=Boolean(task.task_id)&&s.codex_available===true&&!critical.test(text)&&targetAllowed;let reason='NONE';if(!task.task_id)reason='Missing task.';else if(s.codex_available!==true)reason='Codex unavailable.';else if(critical.test(text))reason='Critical operation is not eligible for Host Writer.';else if(!targetAllowed)reason='Writer target must be exactly PRODUCTION or SMOKE_FIXTURE; missing, path-like, case/whitespace variants, and unknown values are rejected.';return [{json:{...s,writer_target:writerTarget,writer_target_valid:targetAllowed,child_route:safe?'SAFE':'BLOCKED',child_block_reason:safe?'NONE':reason}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -4016,
+        576
+      ],
+      "id": "e0b8ef99-d375-4b8e-9351-5beb6c5cd963",
+      "name": "Codex Task Safety Gate"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "a01b9bdf-3df0-508d-bb08-953b7bb7c117",
+                    "leftValue": "={{ $json.child_route }}",
+                    "rightValue": "SAFE",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "SAFE"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "d5fb8547-e3d0-56a1-b8cc-d1a4e8f88a19",
+                    "leftValue": "={{ $json.child_route }}",
+                    "rightValue": "BLOCKED",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "BLOCKED"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -3776,
+        576
+      ],
+      "id": "ccd3be15-b834-4a84-96d1-9752e8ae0f73",
+      "name": "Codex Safety Router"
+    },
+    {
+      "parameters": {
+        "jsCode": "function uuid(){return'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0,v=c==='x'?r:(r&3|8);return v.toString(16);});}const s=$input.first().json,t=s.current_task,id=uuid();const roots=Object.freeze({PRODUCTION:'/data/host-writer',SMOKE_FIXTURE:'/data/smoke-host-writer'});const queueRoot=roots[s.writer_target];if(!queueRoot)throw new Error('Invalid symbolic writer target; refusing filesystem access.');const prompt=`AI Product Factory V4 controlled repository task.\\nTASK_ID: ${t.task_id}\\nOBJECTIVE: ${t.objective}\\nEXPECTED_RESULT: ${t.expected_result}\\nACCEPTANCE_CRITERIA: ${JSON.stringify(t.acceptance_criteria||[])}\\nTEST_REQUIREMENTS: ${JSON.stringify(t.test_requirements||[])}\\nThis is attempt ${t.attempt||1}. Work only in the approved repository. Do not read .env/secrets/credentials. Do not write production databases. Do not run migrations. Do not deploy. Do not use destructive Git. Do not commit or push. Do not weaken sandboxes. Do not access the Docker socket. Preserve unrelated work. Run proportionate non-production tests. Return changed/new/deleted files and a concise summary. Never auto-accept changes.`;return [{json:{sprint_state:s,writer_target:s.writer_target,job_id:id,job_path:`${queueRoot}/inbox/${id}.json`,result_path:`${queueRoot}/results/${id}.json`,job_payload:JSON.stringify({prompt},null,2)}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3536,
+        464
+      ],
+      "id": "cf56bd5a-82d5-4f35-9969-39868a888e2d",
+      "name": "Build Host Writer Job"
+    },
+    {
+      "parameters": {
+        "operation": "toText",
+        "sourceProperty": "job_payload",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        -3296,
+        464
+      ],
+      "id": "1b01bfab-ec7c-4304-9721-4a04a9194a37",
+      "name": "Convert Host Writer Job"
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "={{ $('Build Host Writer Job').item.json.job_path }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        -3056,
+        464
+      ],
+      "id": "0d82c51b-838d-4517-90f2-4058e33ef46b",
+      "name": "Host Writer Submit"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b=$('Build Host Writer Job').item.json,now=Date.now();return [{json:{sprint_state:b.sprint_state,job_id:b.job_id,result_path:b.result_path,poll_started_at:now,poll_deadline_at:now+25*60*1000,poll_attempt:0,poll_max_attempts:100}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2816,
+        464
+      ],
+      "id": "7ce1eed0-5ee3-43f5-ab55-ee0ecbdd543f",
+      "name": "Host Writer Poll Init"
+    },
+    {
+      "parameters": {
+        "amount": 15
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -2576,
+        464
+      ],
+      "id": "2c4965d4-a31a-49d2-9900-2f5f1aabf183",
+      "name": "Host Writer Wait",
+      "webhookId": "6fb8e705-8be9-5318-aeea-7704753b6782"
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ $json.result_path }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        -2336,
+        464
+      ],
+      "id": "38c33238-22fa-45f1-9611-fbea7708af7f",
+      "name": "Host Writer Read Result",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "fromJson",
+        "destinationKey": "result",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        -2096,
+        336
+      ],
+      "id": "92f81dc5-4f15-4206-ae1a-420625ea66a3",
+      "name": "Parse Host Writer Result"
+    },
+    {
+      "parameters": {
+        "jsCode": "const c=$input.first().json,raw=c.result;if(!raw||typeof raw!=='object')throw new Error('Invalid Host Writer result');const reasons=Array.isArray(raw.accepted_state_drift_reasons)?raw.accepted_state_drift_reasons:[];let status='FAILED';if(raw.ok===true&&raw.task_completed===true&&['awaiting_acceptance','accepted'].includes(raw.acceptance_status))status='SUCCESS';else if(raw.ok===false&&raw.task_completed===false&&raw.returncode===null&&raw.audit_recorded===false&&raw.accepted_state_drift_detected===true&&reasons.some(r=>typeof r==='string'&&r.startsWith('pre_run_')))status='PREFLIGHT_DRIFT';return [{json:{...(c.sprint_state||{}),executor_kind:'CODEX',job_id:c.job_id,execution_status:status,ok:raw.ok===true,task_completed:raw.task_completed===true,returncode:raw.returncode??null,acceptance_status:raw.acceptance_status||'not_eligible',audit_recorded:raw.audit_recorded===true,changed_files:Array.isArray(raw.changed_files)?raw.changed_files:[],new_files:Array.isArray(raw.new_files)?raw.new_files:[],deleted_files:Array.isArray(raw.deleted_files)?raw.deleted_files:[],accepted_state_drift_detected:raw.accepted_state_drift_detected===true,accepted_state_drift_reasons:reasons,summary:typeof raw.codex_result?.summary==='string'?raw.codex_result.summary:'',stderr:typeof raw.stderr==='string'?raw.stderr:''}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1856,
+        336
+      ],
+      "id": "df232f79-94a2-4cfe-819c-28f268e066f1",
+      "name": "Normalize Host Writer Result"
+    },
+    {
+      "parameters": {
+        "jsCode": "let p;try{p=$('Host Writer Wait').item.json;}catch(e){try{p=$('Host Writer Poll Init').item.json;}catch(_){throw new Error('Polling state unavailable');}}const n={...p,poll_attempt:Number(p.poll_attempt||0)+1};n.poll_decision=Date.now()>=Number(n.poll_deadline_at)||n.poll_attempt>=Number(n.poll_max_attempts)?'TIMEOUT':'WAIT';return [{json:n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2096,
+        624
+      ],
+      "id": "47cd2b14-cc3f-4e16-952b-777bf9bb3856",
+      "name": "Host Writer Poll Failure"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "034f0bfb-48f5-5515-b0d7-3a943b6257a2",
+                    "leftValue": "={{ $json.poll_decision }}",
+                    "rightValue": "WAIT",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "WAIT"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "b1c945d1-531c-5901-8501-ee9a1c3cf1b4",
+                    "leftValue": "={{ $json.poll_decision }}",
+                    "rightValue": "TIMEOUT",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "TIMEOUT"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -1856,
+        624
+      ],
+      "id": "6f9dd6e7-e5a2-442a-9951-48f496058aa3",
+      "name": "Host Writer Poll Router"
+    },
+    {
+      "parameters": {
+        "jsCode": "const s=$input.first().json;return [{json:{...(s.sprint_state||{}),executor_kind:'CODEX',job_id:s.job_id,execution_status:'FAILED',ok:false,task_completed:false,returncode:null,acceptance_status:'not_eligible',audit_recorded:false,changed_files:[],new_files:[],deleted_files:[],accepted_state_drift_detected:false,accepted_state_drift_reasons:[],summary:'',stderr:'Host Writer result did not appear within bounded 25-minute polling. No resubmission was attempted.'}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1616,
+        704
+      ],
+      "id": "1463e22e-2467-4a1a-a25a-45b0be290f73",
+      "name": "Host Writer Timeout"
+    },
+    {
+      "parameters": {
+        "jsCode": "const s=$input.first().json;return [{json:{...s,executor_kind:'CODEX',job_id:null,execution_status:'NEEDS_REVIEW',ok:false,task_completed:false,returncode:null,acceptance_status:'not_eligible',audit_recorded:false,changed_files:[],new_files:[],deleted_files:[],accepted_state_drift_detected:false,accepted_state_drift_reasons:[],summary:'',stderr:s.child_block_reason||'Codex task blocked by child safety gate.'}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3536,
+        736
+      ],
+      "id": "a690d254-1134-4572-bea9-858a5db8f1a0",
+      "name": "Codex Blocked Result"
+    }
+  ],
+  "connections": {
+    "Codex Task Input": {
+      "main": [
+        [
+          {
+            "node": "Codex Task Safety Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Codex Task Safety Gate": {
+      "main": [
+        [
+          {
+            "node": "Codex Safety Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Host Writer Job": {
+      "main": [
+        [
+          {
+            "node": "Convert Host Writer Job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert Host Writer Job": {
+      "main": [
+        [
+          {
+            "node": "Host Writer Submit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Host Writer Submit": {
+      "main": [
+        [
+          {
+            "node": "Host Writer Poll Init",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Host Writer Poll Init": {
+      "main": [
+        [
+          {
+            "node": "Host Writer Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Host Writer Wait": {
+      "main": [
+        [
+          {
+            "node": "Host Writer Read Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Host Writer Result": {
+      "main": [
+        [
+          {
+            "node": "Normalize Host Writer Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Host Writer Poll Failure": {
+      "main": [
+        [
+          {
+            "node": "Host Writer Poll Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Codex Safety Router": {
+      "main": [
+        [
+          {
+            "node": "Build Host Writer Job",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Codex Blocked Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Host Writer Read Result": {
+      "main": [
+        [
+          {
+            "node": "Parse Host Writer Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Host Writer Poll Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Host Writer Poll Router": {
+      "main": [
+        [
+          {
+            "node": "Host Writer Wait",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Host Writer Timeout",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "staticData": null,
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": {},
+  "versionId": "98fcd760-6771-44f1-8d54-c91085ab1b9c",
+  "activeVersionId": null,
+  "versionCounter": 4,
+  "triggerCount": 0,
+  "sourceWorkflowId": null,
+  "tags": [],
+  "shared": [
+    {
+      "updatedAt": "2026-09-05T15:50:14.078Z",
+      "createdAt": "2026-09-05T15:50:14.078Z",
+      "role": "workflow:owner",
+      "workflowId": "y5gVRIcXPvXoTQic",
+      "projectId": "0C6444BZKM0lyQ6y",
+      "project": {
+        "updatedAt": "2026-09-04T07:48:52.728Z",
+        "createdAt": "2026-09-04T07:29:42.652Z",
+        "id": "0C6444BZKM0lyQ6y",
+        "name": "murat cinar <muratcinar6@gmail.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "7b960bff-3d36-4c1b-89d2-58e344ca2fe4"
+      }
+    }
+  ],
+  "versionMetadata": {
+    "name": null,
+    "description": null
+  }
+}

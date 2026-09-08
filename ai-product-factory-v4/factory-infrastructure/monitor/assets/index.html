@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI Product Factory — Factory Floor</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <p class="eyebrow">LOCAL FACTORY MONITOR</p>
+        <h1>Factory Floor</h1>
+      </div>
+      <div class="header-actions">
+        <a class="back" href="http://127.0.0.1:8765">&larr; Director Console</a>
+        <div id="factory-status" class="status WAITING">WAITING</div>
+      </div>
+    </header>
+    <section class="summary project-summary" aria-label="Project summary">
+      <div><span>Project</span><strong id="project-title">No project loaded</strong></div>
+      <div><span>Project status</span><strong id="project-status">—</strong></div>
+      <div><span>Work Units</span><strong id="project-progress">0 / 0 DONE</strong></div>
+      <div><span>Current Work Unit</span><strong id="current-work-unit">—</strong></div>
+      <div><span>Project health</span><strong id="project-health">—</strong></div>
+      <div><span>Failures / review</span><strong id="project-failures">—</strong></div>
+    </section>
+    <section class="summary" aria-label="Sprint summary">
+      <div><span>Sprint</span><strong id="sprint-id">No sprint observed</strong></div>
+      <div><span>Current stage</span><strong id="current-stage">—</strong></div>
+      <div><span>Updated</span><strong id="updated-at">—</strong></div>
+      <div><span>Inspector score</span><strong id="factory-score">—</strong></div>
+    </section>
+    <p id="connection-state" class="connection">Loading local telemetry…</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Name</th><th>Current / last activity</th><th>Updated</th></tr></thead>
+        <tbody id="node-rows"></tbody>
+      </table>
+    </div>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>
