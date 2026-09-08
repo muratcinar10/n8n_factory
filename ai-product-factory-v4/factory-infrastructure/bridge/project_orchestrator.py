@@ -72,6 +72,8 @@ def diagnosis_tr(summary: str, stage: str) -> str:
         return "Factory HTTP yanıtı zaman aşımına uğradı. Eşleşen execution hâlâ çalışıyorsa bu tek başına terminal sonuç değildir."
     if "no execution data" in text_value or "expressionerror" in text_value:
         return "Factory bir düğümde boş execution verisi nedeniyle durdu."
+    if "known_context" in text_value or "normalize analyst" in text_value or stage == "Normalize Analyst Result":
+        return "Kök sorun: known_context veri sözleşmesi beklenen biçimle uyuşmadı."
     if stage == "Factory Submission":
         return "Product Factory gönderimi tamamlanmış bir sprint raporu üretmedi."
     if "provider_role_unknown" in text_value or "tamamlanan factory rolü" in text_value or (stage == "Provider Success Router" and "unknown" in text_value):
