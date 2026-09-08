@@ -18,7 +18,8 @@ function renderDiagnosis(state){
   $('diagnosis-root').textContent=`Kök sorun: ${text(d.summary_tr||d.summary)}. QA, Denetçi ve sonraki bağımlı işlerin durması bu ilk sorunun sonucudur.`;
   $('diag-id').textContent=`${problem.id} — ${text(problem.title)}`;
   $('diag-status').textContent=labelStatus(problem.status);
-  $('diag-stage').textContent=text(d.stage);
+  $('diag-stage').textContent=text(d.stage_tr||d.stage);
+  $('diag-fallback').textContent=text(d.fallback_tr,'—');
   $('diag-last').textContent=text(d.last_success_stage);
   $('diag-next').textContent=text(d.expected_next_stage);
   $('diag-attempt').textContent=`${problem.attempts||0} / ${state.max_attempts||3}`;

@@ -513,6 +513,69 @@ class OrchestratorTests(unittest.TestCase):
         }
         self.assertTrue(orchestrator.is_infrastructure_routing_review(unit))
 
+    def test_analyst_timeout_diagnosis_is_turkish(self):
+        tr = orchestrator.diagnosis_tr(
+            "The connection was aborted, perhaps the server is offline",
+            "Analyst",
+        )
+        self.assertIn("Birincil Analyst sağlayıcısı zaman aşımına uğradı", tr)
+        self.assertEqual("Analyst sağlayıcı çağrısı", orchestrator.stuck_stage_tr("Normalize Analyst Result", "PROVIDER_TIMEOUT 300000ms", "Analyst"))
+        self.assertEqual("DENENMEDİ", orchestrator.fallback_status_tr("The connection was aborted, perhaps the server is offline", "Analyst"))
+        self.assertEqual("DENENDİ", orchestrator.fallback_status_tr("PRIMARY_TIMEOUT", "Analyst", {"_provider_timeout_state": "PRIMARY_TIMEOUT", "_provider_fallback_attempted": True}))
+        self.assertEqual("BAŞARILI", orchestrator.fallback_status_tr("", "", {"_provider_timeout_state": "FALLBACK_SUCCESS"}))
+        self.assertEqual("BAŞARISIZ", orchestrator.fallback_status_tr("PROVIDER_CHAIN_EXHAUSTED", "Provider Failure Terminal"))
+
+    def test_webhook_timeout_keeps_running_execution(self):
+        merged = orchestrator.merge_execution_snapshot(
+            {"transport_status": "TIMEOUT", "reason": "TimeoutError"},
+            {"id": "97", "status": "running", "finished": False, "data": {"resultData": {"lastNodeExecuted": "Analyst"}}},
+        )
+        self.assertEqual("RUNNING", merged["transport_status"])
+        self.assertTrue(merged["keep_running"])
+        self.assertEqual("97", merged["factory_execution_id"])
+        status, summary = orchestrator.classify_result(merged)
+        self.assertEqual("RUNNING", status)
+        self.assertIn("still running", summary)
+
+    def test_analyst_timeout_review_is_infrastructure(self):
+        unit = {
+            "status": "NEEDS_REVIEW",
+            "qa_status": None,
+            "last_error": "Analyst: The connection was aborted, perhaps the server is offline",
+            "diagnosis": {
+                "stage": "Analyst",
+                "last_success_stage": "Director Sprint Input",
+                "expected_next_stage": "Normalize Analyst Result",
+            },
+        }
+        self.assertTrue(orchestrator.is_infrastructure_routing_review(unit))
+        unit["last_error"] = "provider_chain_exhausted TECHNICAL_TIMEOUT"
+        self.assertTrue(orchestrator.is_infrastructure_routing_review(unit))
+        timeout_unit = {
+            "status": "NEEDS_REVIEW",
+            "qa_status": None,
+            "factory_execution_id": "97",
+            "meaningful_factory_attempt": False,
+            "last_error": "Factory transport failed: timeout",
+            "diagnosis": {
+                "stage": "Factory Submission",
+                "last_success_stage": "Work Unit Packaging",
+                "expected_next_stage": None,
+            },
+        }
+        self.assertTrue(orchestrator.is_infrastructure_routing_review(timeout_unit))
+
+    def test_error_execution_with_unfinished_flag_is_finished(self):
+        self.assertTrue(orchestrator.execution_finished({"id": "93", "status": "error", "finished": False}))
+        self.assertTrue(orchestrator.execution_finished({"id": "97", "status": "success", "finished": True}))
+        self.assertFalse(orchestrator.execution_finished({"id": "98", "status": "running", "finished": False}))
+
+    def test_urlerror_timeout_is_transport_timeout(self):
+        self.assertTrue(orchestrator._is_transport_timeout(TimeoutError("timed out")))
+        self.assertTrue(orchestrator._is_transport_timeout(orchestrator.URLError("timed out")))
+        self.assertFalse(orchestrator._is_transport_timeout(orchestrator.URLError("connection refused")))
+
+
 
 if __name__ == "__main__":
     unittest.main()

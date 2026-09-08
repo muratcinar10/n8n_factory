@@ -8,6 +8,8 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import subprocess
+import sys
 import threading
 from typing import Callable, Optional
 from urllib import request
@@ -81,6 +83,14 @@ def diagnosis_tr(summary: str, stage: str) -> str:
     text_value = summary.lower()
     if "jsondecodeerror" in text_value or "non_json" in text_value or "empty_factory_response" in text_value:
         return "Product Factory geçerli bir JSON sonuç döndürmedi. Gönderim başlamış olabilir; webhook hata yolunda yanıt düğümüne ulaşmadı."
+    if (
+        "provider_timeout" in text_value
+        or "primary_timeout" in text_value
+        or "connection was aborted" in text_value
+        or "server is offline" in text_value
+        or (stage in {"Analyst", "Provider Failure Classifier"} and "timeout" in text_value)
+    ):
+        return "Birincil Analyst sağlayıcısı zaman aşımına uğradı."
     if "timeout" in text_value:
         return "Factory HTTP yanıtı zaman aşımına uğradı. Eşleşen execution hâlâ çalışıyorsa bu tek başına terminal sonuç değildir."
     if "no execution data" in text_value or "expressionerror" in text_value:
@@ -126,13 +136,64 @@ def affected_units(state: dict[str, object], blocker_id: str) -> list[str]:
     return [unit["id"] for unit in state.get("work_units", []) if blocker_id in dependencies.get(unit["id"], [])]
 
 
-def build_diagnosis(state: dict[str, object], unit: dict[str, object], *, status: str, summary: str, stage: str, last_success: str, execution_id: object = None, expected_next: object = None) -> dict[str, object]:
+def stuck_stage_tr(stage: str, summary: str, last_success: str = "") -> str:
+    blob = f"{stage} {summary} {last_success}".lower()
+    if "analyst" in blob and (
+        "timeout" in blob
+        or "aborted" in blob
+        or "offline" in blob
+        or "provider_timeout" in blob
+        or "primary_timeout" in blob
+        or "chain_exhausted" in blob
+        or "provider_chain_exhausted" in blob
+    ):
+        return "Analyst sağlayıcı çağrısı"
+    labels = {
+        "Analyst": "Analyst sağlayıcı çağrısı",
+        "Analyst NVIDIA Fallback": "Analyst yedek sağlayıcı çağrısı",
+        "Analyst Groq Fallback": "Analyst yedek sağlayıcı çağrısı",
+        "Provider Failure Classifier": "Analyst sağlayıcı çağrısı",
+        "Provider Failure Terminal": "Sağlayıcı zinciri sonu",
+        "Factory Submission": "Factory gönderimi",
+        "Factory webhook response": "Factory webhook yanıtı",
+    }
+    return labels.get(stage, stage)
+
+
+def fallback_status_tr(summary: str, stage: str = "", result: dict[str, object] | None = None) -> str:
+    payload = result if isinstance(result, dict) else {}
+    state = str(payload.get("_provider_timeout_state") or "")
+    if state == "FALLBACK_SUCCESS":
+        return "BAŞARILI"
+    if state == "PRIMARY_SUCCESS":
+        return "DENENMEDİ"
+    if state == "CHAIN_EXHAUSTED":
+        return "BAŞARISIZ"
+    if state in {"PRIMARY_TIMEOUT", "FALLBACK_TIMEOUT"} or payload.get("_provider_fallback_attempted"):
+        return "DENENDİ" if payload.get("_provider_fallback_attempted") or state == "FALLBACK_TIMEOUT" else "DENENMEDİ"
+    blob = f"{summary} {stage}".lower()
+    if "fallback_success" in blob:
+        return "BAŞARILI"
+    if "primary_success" in blob:
+        return "DENENMEDİ"
+    if "chain_exhausted" in blob or "provider_chain_exhausted" in blob:
+        return "BAŞARISIZ"
+    if any(token in blob for token in ("fallback_timeout", "fallback_attempted", "analyst nvidia", "analyst groq", "failover")):
+        return "DENENDİ"
+    if any(token in blob for token in ("provider_timeout", "primary_timeout", "connection was aborted", "server is offline")):
+        return "DENENMEDİ"
+    return "—"
+
+
+def build_diagnosis(state: dict[str, object], unit: dict[str, object], *, status: str, summary: str, stage: str, last_success: str, execution_id: object = None, expected_next: object = None, result: dict[str, object] | None = None) -> dict[str, object]:
     blocked = affected_units(state, str(unit["id"]))
     expected = str(expected_next or HANDOFF_NEXT.get(last_success) or "")
     return {
         "summary": sanitize_text(summary, 800),
         "summary_tr": diagnosis_tr(summary, stage),
         "stage": stage,
+        "stage_tr": stuck_stage_tr(stage, summary, last_success),
+        "fallback_tr": fallback_status_tr(summary, stage, result),
         "last_success_stage": last_success,
         "expected_next_stage": expected or None,
         "root_failure": sanitize_text(summary, 400),
@@ -537,6 +598,7 @@ def package_work_unit(state: dict[str, object], unit: dict[str, object]) -> dict
         "forbidden_actions": definition["forbidden_actions"],
         "requested_target": target,
         "writer_target": target,
+        "historical_execution_ids": list(unit.get("historical_execution_ids") or []),
         "context": {
             "product_summary": (plan.get("global_context") or plan["project_goal"])[:4_000],
             "definition_of_done": plan["definition_of_done"],
@@ -581,6 +643,50 @@ def publish_dispatch_telemetry(state: dict[str, object], unit: dict[str, object]
     os.replace(temporary, PROJECT_TELEMETRY_PATH)
 
 
+def n8n_db_execution_rows(limit: int = 10) -> list[dict[str, object]]:
+    if os.environ.get("FACTORY_N8N_DB_CORRELATE", "1").lower() in {"0", "false", "no"}:
+        return []
+    if os.environ.get("FACTORY_N8N_DB_CORRELATE") != "1" and "unittest" in sys.modules:
+        return []
+    try:
+        sql = (
+            "SELECT json_build_object('id', id::text, 'status', status, 'finished', finished) "
+            f"FROM execution_entity WHERE \"workflowId\"='{FACTORY_WORKFLOW_ID}' "
+            f"ORDER BY id DESC LIMIT {int(limit)}"
+        )
+        out = subprocess.check_output(
+            [
+                "docker",
+                "exec",
+                "n8n-self-hosted-ai-postgres-1",
+                "psql",
+                "-U",
+                "n8n_local",
+                "-d",
+                "n8n",
+                "-tAc",
+                sql,
+            ],
+            timeout=10,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    rows: list[dict[str, object]] = []
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict) and value.get("id"):
+            rows.append(value)
+    return rows
+
+
 def n8n_request(path: str) -> dict[str, object] | None:
     key = os.environ.get("N8N_API_KEY", "").strip()
     if not key:
@@ -601,11 +707,21 @@ def n8n_request(path: str) -> dict[str, object] | None:
 def n8n_execution_snapshot(execution_id: str) -> dict[str, object] | None:
     if not execution_id:
         return None
-    return n8n_request(f"/api/v1/executions/{execution_id}?includeData=true")
+    snapshot = n8n_request(f"/api/v1/executions/{execution_id}?includeData=true")
+    if snapshot:
+        return snapshot
+    for row in n8n_db_execution_rows(20):
+        if str(row.get("id")) == str(execution_id):
+            return row
+    return None
 
 
 def execution_finished(snapshot: dict[str, object]) -> bool:
     status = str(snapshot.get("status") or "").lower()
+    if status in {"success", "error", "crashed", "failed", "canceled", "cancelled"}:
+        return True
+    if snapshot.get("stoppedAt") or snapshot.get("stopped_at"):
+        return True
     if status in {"running", "waiting", "new"}:
         return False
     if snapshot.get("finished") is False:
@@ -639,19 +755,37 @@ def wait_for_running_execution(execution_id: str, *, seconds: int = 1200) -> dic
 
 def correlate_timeout(brief: dict[str, object]) -> dict[str, object] | None:
     listing = n8n_request(f"/api/v1/executions?workflowId={FACTORY_WORKFLOW_ID}&limit=10")
-    if not listing:
+    rows = listing.get("data") if isinstance(listing, dict) and isinstance(listing.get("data"), list) else n8n_db_execution_rows(10)
+    if not rows:
         return None
-    rows = listing.get("data") if isinstance(listing.get("data"), list) else []
+    history = {str(item) for item in (brief.get("historical_execution_ids") or []) if item}
     marker = f"{brief.get('project_id')}:{brief.get('work_unit_id')}"
+    sprint = str(brief.get("sprint_id") or "")
     for row in rows:
         if not isinstance(row, dict):
             continue
-        snapshot = n8n_execution_snapshot(str(row.get("id") or "")) or row
+        execution_id = str(row.get("id") or "")
+        if execution_id in history:
+            continue
+        snapshot = n8n_execution_snapshot(execution_id) or row
+        if execution_finished(snapshot):
+            continue
         blob = json.dumps(snapshot, ensure_ascii=False)[:20_000]
-        if marker in blob or str(brief.get("sprint_id") or "") in blob:
+        if marker in blob or (sprint and sprint in blob):
             return snapshot
-    running = next((row for row in rows if isinstance(row, dict) and not execution_finished(row)), None)
-    return n8n_execution_snapshot(str(running.get("id"))) if running else None
+    running = next(
+        (
+            row
+            for row in rows
+            if isinstance(row, dict)
+            and str(row.get("id") or "") not in history
+            and not execution_finished(row)
+        ),
+        None,
+    )
+    if not running:
+        return None
+    return n8n_execution_snapshot(str(running.get("id"))) or running
 
 
 def last_executed_node(snapshot: dict[str, object]) -> str:
@@ -742,6 +876,16 @@ def parse_factory_payload(raw: bytes, headers: object = None) -> dict[str, objec
         }
 
 
+def _is_transport_timeout(exc: BaseException) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    reason = getattr(exc, "reason", None)
+    if isinstance(reason, TimeoutError):
+        return True
+    blob = f"{exc} {reason or ''}".lower()
+    return "timed out" in blob or "timeout" in blob
+
+
 def submit_to_factory(brief: dict[str, object]) -> dict[str, object]:
     body = json.dumps(brief, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     req = request.Request(FACTORY_WEBHOOK, data=body, headers={"Content-Type": "application/json"}, method="POST")
@@ -761,7 +905,11 @@ def submit_to_factory(brief: dict[str, object]) -> dict[str, object]:
         parsed["reason"] = parsed.get("reason") or f"HTTPError:{exc.code}"
         return parsed
     except (URLError, TimeoutError, OSError) as exc:
-        return {"transport_status": "TIMEOUT" if isinstance(exc, TimeoutError) else "FAILED", "reason": type(exc).__name__}
+        failed = {"transport_status": "TIMEOUT" if _is_transport_timeout(exc) else "FAILED", "reason": type(exc).__name__}
+        snapshot = correlate_timeout(brief)
+        if snapshot:
+            return merge_execution_snapshot(failed, snapshot)
+        return failed
 
 
 def classify_result(result: dict[str, object]) -> tuple[str, str]:
@@ -947,7 +1095,7 @@ def run_project(project_id: str, submitter: Callable[[dict[str, object]], dict[s
                 stage = "Factory webhook response"
             current["diagnosis"] = None if unit_status == "DONE" else build_diagnosis(
                 state, current, status=unit_status, summary=summary, stage=stage, last_success=last_success,
-                execution_id=current.get("factory_execution_id"), expected_next=expected_next,
+                execution_id=current.get("factory_execution_id"), expected_next=expected_next, result=result,
             )
             if unit_status == "FAILED":
                 previous = current.get("failure_signature")
@@ -1038,6 +1186,11 @@ def is_infrastructure_routing_review(unit: dict[str, object]) -> bool:
         or "acceptance criteria disappeared" in blob
         or "inherited acceptance" in blob
         or "specialist_contract" in blob
+        or "provider_chain_exhausted" in blob
+        or "provider_timeout" in blob
+        or "technical_timeout" in blob
+        or "connection was aborted" in blob
+        or ("factory transport failed" in blob and "timeout" in blob)
     )
 
 
