@@ -248,7 +248,17 @@ class OrchestratorTests(unittest.TestCase):
         brief = orchestrator.package_work_unit(state, state["work_units"][0])
         self.assertEqual("PRODUCTION", brief["requested_target"])
         self.assertEqual("PRODUCTION", brief["writer_target"])
+        self.assertTrue(brief["codex_available"])
         self.assertEqual("W001", brief["work_unit_id"])
+        self.assertNotIn("workflow_id", json.dumps(brief))
+        self.assertNotIn("filesystem_path", json.dumps(brief))
+
+    def test_synthetic_project_sets_codex_available_for_allowlisted_smoke_target(self):
+        value = orchestrator.validate_manifest(manifest([unit("W001")]))
+        state = orchestrator.prepare_project(value)
+        brief = orchestrator.package_work_unit(state, state["work_units"][0])
+        self.assertEqual("SMOKE_FIXTURE", brief["writer_target"])
+        self.assertTrue(brief["codex_available"])
 
     def test_transport_failure_shows_diagnosis_and_blocks_dependent(self):
         def submit(_brief):
@@ -602,6 +612,27 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual("Seçildi", selected["laguna_tr"])
         self.assertIn("Laguna'ya devam etmedi", orchestrator.diagnosis_tr("provider_not_found", "Developer Dispatcher"))
         self.assertEqual("Developer seçimi", orchestrator.stuck_stage_tr("Recovery Controller", "PROVIDER_NOT_FOUND", "MiniMax Developer"))
+        self.assertIn("öneri üretebilir", orchestrator.diagnosis_tr("Codex unavailable", "Codex Executor"))
+
+    def test_infrastructure_reset_preserves_attempt_ledger(self):
+        orchestrator.prepare_project(orchestrator.validate_manifest(manifest([unit("W001")])))
+        state = orchestrator.load_state("PROJECT-TEST")
+        w001 = state["work_units"][0]
+        w001["status"] = "NEEDS_REVIEW"
+        w001["attempts"] = 3
+        w001["qa_status"] = "NOT_VERIFIED"
+        w001["last_error"] = "Completion contract not met: status=COMPLETED_WITH_OPEN_ITEMS, qa=NOT_VERIFIED, deferred=Developer pool exhausted after technical failure."
+        w001["outcome_summary"] = w001["last_error"]
+        w001["last_result"] = {"status": "NEEDS_REVIEW", "summary": w001["last_error"]}
+        w001["historical_execution_ids"] = ["100", "101"]
+        orchestrator.atomic_write(state)
+        self.assertTrue(orchestrator.reset_unproven_transport_reviews(orchestrator.load_state("PROJECT-TEST")))
+        recovered = orchestrator.load_state("PROJECT-TEST")["work_units"][0]
+        self.assertEqual("READY", recovered["status"])
+        self.assertEqual(0, recovered["attempts"])
+        self.assertEqual(3, recovered["historical_attempt_ledger"][0]["attempts"])
+        self.assertEqual(["100", "101"], recovered["historical_attempt_ledger"][0]["historical_execution_ids"])
+        self.assertEqual(["100", "101"], recovered["historical_execution_ids"])
 
     def test_meaningful_open_items_are_not_auto_reset(self):
         unit = {

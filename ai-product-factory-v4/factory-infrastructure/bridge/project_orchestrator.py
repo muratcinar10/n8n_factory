@@ -110,6 +110,8 @@ def diagnosis_tr(summary: str, stage: str) -> str:
         or (stage == "Normalize Specialist Result" and "constraint" in text_value)
     ):
         return "Kök sorun: Specialist çıktısında devralınan kısıtlar korunmadı."
+    if "incomplete_factory_success" in text_value and "last=unknown" in text_value:
+        return "Factory HTTP beklemesi bitti; Codex Host Writer sonucu gelmedi. Uygulanmış kanıt webhook sözleşmesine yazılmadı."
     if (
         "incomplete_factory_success" in text_value
         or "missing handoff" in text_value
@@ -118,6 +120,13 @@ def diagnosis_tr(summary: str, stage: str) -> str:
         return "Kök sorun: başarılı Specialist çıktısından sonra beklenen geçiş çalışmadı."
     if stage == "Factory Submission":
         return "Product Factory gönderimi tamamlanmış bir sprint raporu üretmedi."
+    if (
+        "host writer" in text_value
+        or "codex executor" in text_value
+        or "codex unavailable" in text_value
+        or stage in {"Codex Executor", "Codex Task Safety Gate", "Host Writer Submit", "Host Writer Timeout"}
+    ):
+        return "Codex uygulanmış dosya kanıtı üretemedi. MiniMax ve Laguna yalnızca öneri üretebilir; QA bunları uygulanmış iş olarak kabul etmez."
     if "provider_role_unknown" in text_value or "tamamlanan factory rolü" in text_value or (stage == "Provider Success Router" and "unknown" in text_value):
         return "Kök sorun: Provider sonucu başarıyla döndü ancak tamamlanan factory rolü belirlenemedi."
     if (
@@ -652,6 +661,7 @@ def package_work_unit(state: dict[str, object], unit: dict[str, object]) -> dict
         "forbidden_actions": definition["forbidden_actions"],
         "requested_target": target,
         "writer_target": target,
+        "codex_available": True,
         "historical_execution_ids": list(unit.get("historical_execution_ids") or []),
         "context": {
             "product_summary": (plan.get("global_context") or plan["project_goal"])[:4_000],
@@ -1270,6 +1280,18 @@ def reset_unproven_transport_reviews(state: dict[str, object]) -> bool:
         if unit.get("factory_execution_id"):
             history.append(str(unit["factory_execution_id"]))
         unit["historical_execution_ids"] = history[-8:]
+        ledger = list(unit.get("historical_attempt_ledger") or [])
+        ledger.append({
+            "attempts": int(unit.get("attempts") or 0),
+            "status": unit.get("status"),
+            "last_result": unit.get("last_result"),
+            "outcome_summary": unit.get("outcome_summary"),
+            "qa_status": unit.get("qa_status"),
+            "qa_lead_status": unit.get("qa_lead_status"),
+            "completed_at": unit.get("completed_at"),
+            "historical_execution_ids": list(history),
+        })
+        unit["historical_attempt_ledger"] = ledger[-8:]
         unit["status"] = "READY" if not dependencies.get(unit["id"]) else "PENDING"
         unit["attempts"] = 0
         unit["dispatch_id"] = None
