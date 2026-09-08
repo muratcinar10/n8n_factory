@@ -120,6 +120,13 @@ def diagnosis_tr(summary: str, stage: str) -> str:
         return "Product Factory gönderimi tamamlanmış bir sprint raporu üretmedi."
     if "provider_role_unknown" in text_value or "tamamlanan factory rolü" in text_value or (stage == "Provider Success Router" and "unknown" in text_value):
         return "Kök sorun: Provider sonucu başarıyla döndü ancak tamamlanan factory rolü belirlenemedi."
+    if (
+        "developer pool exhausted" in text_value
+        or "provider_not_found" in text_value
+        or "model_unavailable" in text_value
+        or (stage in {"MiniMax Developer", "Developer Dispatcher", "Recovery Controller"} and "minimax" in text_value)
+    ):
+        return "MiniMax teknik olarak kullanılamaz hale geldikten sonra Developer fallback zinciri Laguna'ya devam etmedi."
     return sanitize_text(summary, 800)
 
 
@@ -134,6 +141,46 @@ def affected_units(state: dict[str, object], blocker_id: str) -> list[str]:
     plan = load_plan(str(state.get("project_id", ""))) or {"work_units": []}
     dependencies = {unit["id"]: unit["dependencies"] for unit in plan["work_units"]}
     return [unit["id"] for unit in state.get("work_units", []) if blocker_id in dependencies.get(unit["id"], [])]
+
+
+def developer_chain_tr(summary: str, result: dict[str, object] | None = None) -> dict[str, str]:
+    payload = result if isinstance(result, dict) else {}
+    report = payload.get("sprint_report") if isinstance(payload.get("sprint_report"), dict) else {}
+    exclusions = {str(item).upper() for item in (payload.get("developer_exclusions") or [])}
+    selected = str(payload.get("developer_route") or payload.get("selected_developer") or "").upper()
+    failures = payload.get("technical_failures") if isinstance(payload.get("technical_failures"), list) else []
+    if not failures and isinstance(report, dict) and isinstance(report.get("technical_failures"), list):
+        failures = report["technical_failures"]
+    failed = {str(item.get("developer_route") or "").upper() for item in failures if isinstance(item, dict)}
+    outcomes = report.get("task_outcomes") if isinstance(report.get("task_outcomes"), list) else []
+    used = {str(item.get("developer") or "").upper() for item in outcomes if isinstance(item, dict) and item.get("developer")}
+    if int(report.get("codex_developed_count") or 0) > 0:
+        used.add("CODEX")
+    if int(report.get("minimax_developed_count") or 0) > 0:
+        used.add("MINIMAX")
+    if int(report.get("laguna_developed_count") or 0) > 0:
+        used.add("LAGUNA")
+    blob = summary.lower()
+
+    def one(name: str) -> str:
+        if name == "CODEX" and (payload.get("codex_available") is False or name in exclusions) and name not in used:
+            return "Kullanılamadı"
+        if name == "MINIMAX" and (
+            name in failed
+            or "provider_not_found" in blob
+            or "model_unavailable" in blob
+            or "unavailable for free" in blob
+        ) and name not in used:
+            return "Sağlayıcı bulunamadı"
+        if name in used or selected == name:
+            return "Seçildi"
+        if name in exclusions or name in failed:
+            return "Kullanılamadı"
+        if name == "LAGUNA" and selected != "LAGUNA" and name not in failed:
+            return "Denenmedi"
+        return "—"
+
+    return {"codex_tr": one("CODEX"), "minimax_tr": one("MINIMAX"), "laguna_tr": one("LAGUNA")}
 
 
 def stuck_stage_tr(stage: str, summary: str, last_success: str = "") -> str:
@@ -154,6 +201,9 @@ def stuck_stage_tr(stage: str, summary: str, last_success: str = "") -> str:
         "Analyst Groq Fallback": "Analyst yedek sağlayıcı çağrısı",
         "Provider Failure Classifier": "Analyst sağlayıcı çağrısı",
         "Provider Failure Terminal": "Sağlayıcı zinciri sonu",
+        "Developer Dispatcher": "Developer seçimi",
+        "MiniMax Developer": "Developer seçimi",
+        "Recovery Controller": "Developer seçimi",
         "Factory Submission": "Factory gönderimi",
         "Factory webhook response": "Factory webhook yanıtı",
     }
@@ -188,12 +238,16 @@ def fallback_status_tr(summary: str, stage: str = "", result: dict[str, object] 
 def build_diagnosis(state: dict[str, object], unit: dict[str, object], *, status: str, summary: str, stage: str, last_success: str, execution_id: object = None, expected_next: object = None, result: dict[str, object] | None = None) -> dict[str, object]:
     blocked = affected_units(state, str(unit["id"]))
     expected = str(expected_next or HANDOFF_NEXT.get(last_success) or "")
+    chain = developer_chain_tr(summary, result)
     return {
         "summary": sanitize_text(summary, 800),
         "summary_tr": diagnosis_tr(summary, stage),
         "stage": stage,
         "stage_tr": stuck_stage_tr(stage, summary, last_success),
         "fallback_tr": fallback_status_tr(summary, stage, result),
+        "codex_tr": chain["codex_tr"],
+        "minimax_tr": chain["minimax_tr"],
+        "laguna_tr": chain["laguna_tr"],
         "last_success_stage": last_success,
         "expected_next_stage": expected or None,
         "root_failure": sanitize_text(summary, 400),
@@ -940,7 +994,15 @@ def classify_result(result: dict[str, object]) -> tuple[str, str]:
     if status == "FAILED":
         return "FAILED", str(report.get("failure_signature") or report.get("failure_class") or "FAIL")
     if status in {"COMPLETED_WITH_OPEN_ITEMS", "BLOCKED"} or qa in {"NOT_VERIFIED", "FAIL"} or lead in {"QA_INCOMPLETE", "NOT_VERIFIED"}:
-        return "NEEDS_REVIEW", f"Completion contract not met: status={status or 'UNKNOWN'}, qa={qa or 'UNKNOWN'}"
+        deferred_reason = ""
+        if isinstance(open_items, list) and open_items:
+            first = open_items[0]
+            if isinstance(first, dict):
+                deferred_reason = str(first.get("reason") or "")
+            else:
+                deferred_reason = str(first)
+        extra = f", deferred={deferred_reason}" if deferred_reason else ""
+        return "NEEDS_REVIEW", f"Completion contract not met: status={status or 'UNKNOWN'}, qa={qa or 'UNKNOWN'}{extra}"
     if status == "COMPLETED":
         return "NEEDS_REVIEW", f"Factory completed without a verified QA contract: qa={qa or 'UNKNOWN'}"
     return "NEEDS_REVIEW", "Factory result did not include a complete verified completion contract."
@@ -1191,6 +1253,9 @@ def is_infrastructure_routing_review(unit: dict[str, object]) -> bool:
         or "technical_timeout" in blob
         or "connection was aborted" in blob
         or ("factory transport failed" in blob and "timeout" in blob)
+        or "developer pool exhausted" in blob
+        or "provider_not_found" in blob
+        or "model_unavailable" in blob
     )
 
 

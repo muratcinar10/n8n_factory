@@ -565,6 +565,55 @@ class OrchestratorTests(unittest.TestCase):
         }
         self.assertTrue(orchestrator.is_infrastructure_routing_review(timeout_unit))
 
+    def test_developer_fallback_review_is_infrastructure(self):
+        hangman_style = {
+            "status": "NEEDS_REVIEW",
+            "qa_status": "NOT_VERIFIED",
+            "factory_execution_id": None,
+            "inspector_score": None,
+            "meaningful_factory_attempt": False,
+            "last_error": "Completion contract not met: status=COMPLETED_WITH_OPEN_ITEMS, qa=NOT_VERIFIED",
+            "diagnosis": {"stage": "Product Factory"},
+        }
+        self.assertFalse(orchestrator.is_infrastructure_routing_review(hangman_style))
+        deferred = dict(hangman_style)
+        deferred["factory_execution_id"] = "99"
+        deferred["last_error"] = "Completion contract not met: status=COMPLETED_WITH_OPEN_ITEMS, qa=NOT_VERIFIED, deferred=Developer pool exhausted after technical failure."
+        self.assertTrue(orchestrator.is_infrastructure_routing_review(deferred))
+        qa_after_developer = dict(hangman_style)
+        qa_after_developer["last_error"] = "Completion contract not met: status=COMPLETED_WITH_OPEN_ITEMS, qa=NOT_VERIFIED, deferred=Deterministic QA could not verify mandatory evidence."
+        self.assertFalse(orchestrator.is_infrastructure_routing_review(qa_after_developer))
+        chain = orchestrator.developer_chain_tr(
+            "provider_not_found MODEL_UNAVAILABLE",
+            {
+                "codex_available": False,
+                "developer_exclusions": ["CODEX"],
+                "developer_route": "MINIMAX",
+                "technical_failures": [{"developer_route": "MINIMAX"}],
+            },
+        )
+        self.assertEqual("Kullanılamadı", chain["codex_tr"])
+        self.assertEqual("Sağlayıcı bulunamadı", chain["minimax_tr"])
+        self.assertEqual("Denenmedi", chain["laguna_tr"])
+        selected = orchestrator.developer_chain_tr(
+            "Deterministic QA could not verify mandatory evidence",
+            {"sprint_report": {"laguna_developed_count": 1, "task_outcomes": [{"developer": "LAGUNA"}]}},
+        )
+        self.assertEqual("Seçildi", selected["laguna_tr"])
+        self.assertIn("Laguna'ya devam etmedi", orchestrator.diagnosis_tr("provider_not_found", "Developer Dispatcher"))
+        self.assertEqual("Developer seçimi", orchestrator.stuck_stage_tr("Recovery Controller", "PROVIDER_NOT_FOUND", "MiniMax Developer"))
+
+    def test_meaningful_open_items_are_not_auto_reset(self):
+        unit = {
+            "status": "NEEDS_REVIEW",
+            "qa_status": "NOT_VERIFIED",
+            "factory_execution_id": "100",
+            "meaningful_factory_attempt": True,
+            "last_error": "Completion contract not met: status=COMPLETED_WITH_OPEN_ITEMS, qa=NOT_VERIFIED",
+            "diagnosis": {"stage": "Product Factory"},
+        }
+        self.assertFalse(orchestrator.is_infrastructure_routing_review(unit))
+
     def test_error_execution_with_unfinished_flag_is_finished(self):
         self.assertTrue(orchestrator.execution_finished({"id": "93", "status": "error", "finished": False}))
         self.assertTrue(orchestrator.execution_finished({"id": "97", "status": "success", "finished": True}))
