@@ -20,6 +20,7 @@ function renderDiagnosis(state){
   $('diag-status').textContent=labelStatus(problem.status);
   $('diag-stage').textContent=text(d.stage);
   $('diag-last').textContent=text(d.last_success_stage);
+  $('diag-next').textContent=text(d.expected_next_stage);
   $('diag-attempt').textContent=`${problem.attempts||0} / ${state.max_attempts||3}`;
   $('diag-exec').textContent=text(d.execution_id||problem.factory_execution_id,'Yok');
   $('diag-qa').textContent=text(d.qa_status||problem.qa_status);

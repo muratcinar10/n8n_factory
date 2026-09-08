@@ -64,6 +64,19 @@ def sanitize_text(value: object, maximum: int = 500) -> str:
     return cleaned[:maximum]
 
 
+HANDOFF_NEXT = {
+    "Specialist": "Normalize Specialist Result",
+    "Specialist Fallback": "Normalize Specialist Result",
+    "Specialist Groq Fallback": "Normalize Specialist Result",
+    "Normalize Specialist Result": "Planner",
+    "Analyst": "Normalize Analyst Result",
+    "Planner": "Normalize Planner Result",
+    "Consistency Reviewer": "Normalize Consistency Result",
+}
+
+TERMINAL_FACTORY_NODES = frozenset({"Director Webhook Response", "Factory Telemetry Publisher"})
+
+
 def diagnosis_tr(summary: str, stage: str) -> str:
     text_value = summary.lower()
     if "jsondecodeerror" in text_value or "non_json" in text_value or "empty_factory_response" in text_value:
@@ -74,6 +87,13 @@ def diagnosis_tr(summary: str, stage: str) -> str:
         return "Factory bir düğümde boş execution verisi nedeniyle durdu."
     if "known_context" in text_value or "normalize analyst" in text_value or stage == "Normalize Analyst Result":
         return "Kök sorun: known_context veri sözleşmesi beklenen biçimle uyuşmadı."
+    if (
+        "incomplete_factory_success" in text_value
+        or "missing handoff" in text_value
+        or stage == "Normalize Specialist Result"
+        or "normalize specialist" in text_value
+    ):
+        return "Kök sorun: başarılı Specialist çıktısından sonra beklenen geçiş çalışmadı."
     if stage == "Factory Submission":
         return "Product Factory gönderimi tamamlanmış bir sprint raporu üretmedi."
     if "provider_role_unknown" in text_value or "tamamlanan factory rolü" in text_value or (stage == "Provider Success Router" and "unknown" in text_value):
@@ -94,13 +114,15 @@ def affected_units(state: dict[str, object], blocker_id: str) -> list[str]:
     return [unit["id"] for unit in state.get("work_units", []) if blocker_id in dependencies.get(unit["id"], [])]
 
 
-def build_diagnosis(state: dict[str, object], unit: dict[str, object], *, status: str, summary: str, stage: str, last_success: str, execution_id: object = None) -> dict[str, object]:
+def build_diagnosis(state: dict[str, object], unit: dict[str, object], *, status: str, summary: str, stage: str, last_success: str, execution_id: object = None, expected_next: object = None) -> dict[str, object]:
     blocked = affected_units(state, str(unit["id"]))
+    expected = str(expected_next or HANDOFF_NEXT.get(last_success) or "")
     return {
         "summary": sanitize_text(summary, 800),
         "summary_tr": diagnosis_tr(summary, stage),
         "stage": stage,
         "last_success_stage": last_success,
+        "expected_next_stage": expected or None,
         "root_failure": sanitize_text(summary, 400),
         "why_not_done": sanitize_text(summary, 400),
         "execution_id": str(execution_id) if execution_id else None,
@@ -620,23 +642,44 @@ def correlate_timeout(brief: dict[str, object]) -> dict[str, object] | None:
     return n8n_execution_snapshot(str(running.get("id"))) if running else None
 
 
+def last_executed_node(snapshot: dict[str, object]) -> str:
+    data = snapshot.get("data") if isinstance(snapshot.get("data"), dict) else {}
+    result = data.get("resultData") if isinstance(data.get("resultData"), dict) else {}
+    return str(result.get("lastNodeExecuted") or snapshot.get("lastNodeExecuted") or "")
+
+
 def merge_execution_snapshot(result: dict[str, object], snapshot: dict[str, object]) -> dict[str, object]:
     execution_id = str(snapshot.get("id") or result.get("factory_execution_id") or "")
     merged = dict(result)
     if execution_id:
         merged["factory_execution_id"] = execution_id
         merged["execution_id"] = execution_id
+    last_node = last_executed_node(snapshot)
+    expected_next = HANDOFF_NEXT.get(last_node)
+    if last_node:
+        merged["last_executed_node"] = last_node
+    if expected_next:
+        merged["expected_next_node"] = expected_next
     if not execution_finished(snapshot):
         merged["transport_status"] = "RUNNING"
         merged["keep_running"] = True
         merged["reason"] = "matching_factory_execution_running"
         return merged
     status = str(snapshot.get("status") or "").lower()
+    merged["n8n_status"] = status
     if status in {"success", "crashed", "error", "failed", "canceled"}:
         merged.pop("keep_running", None)
         if status == "success":
-            merged.pop("transport_status", None)
-            merged.setdefault("sprint_report", {"status": "COMPLETED", "qa_result": "UNKNOWN", "qa_lead_result": "UNKNOWN"})
+            merged.pop("sprint_report", None)
+            if last_node not in TERMINAL_FACTORY_NODES:
+                merged["transport_status"] = "FAILED"
+                merged["reason"] = (
+                    f"incomplete_factory_success last={last_node or 'unknown'} "
+                    f"expected_next={expected_next or 'terminal factory stage'} missing handoff"
+                )
+            else:
+                merged["transport_status"] = "FAILED"
+                merged["reason"] = "n8n_success_without_factory_completion_contract"
         else:
             merged["transport_status"] = "FAILED"
             merged["reason"] = execution_failure_summary(snapshot)
@@ -654,10 +697,10 @@ def resolve_factory_result(result: dict[str, object], brief: dict[str, object]) 
         if snapshot:
             return merge_execution_snapshot(result, snapshot)
         return result
-    if transport in {"NON_JSON_RESPONSE", "FAILED"} and execution_id:
-        snapshot = n8n_execution_snapshot(execution_id)
+    if transport in {"NON_JSON_RESPONSE", "FAILED"}:
+        snapshot = n8n_execution_snapshot(execution_id) if execution_id else correlate_timeout(brief)
         if snapshot and not execution_finished(snapshot):
-            waited = wait_for_running_execution(execution_id)
+            waited = wait_for_running_execution(str(snapshot.get("id") or execution_id))
             return merge_execution_snapshot(result, waited or snapshot)
         if snapshot:
             return merge_execution_snapshot(result, snapshot)
@@ -713,6 +756,14 @@ def classify_result(result: dict[str, object]) -> tuple[str, str]:
     report = result.get("sprint_report") if isinstance(result.get("sprint_report"), dict) else result
     if result.get("keep_running") or str(result.get("transport_status") or "") == "RUNNING":
         return "RUNNING", "Matching factory execution is still running"
+    last_node = str(result.get("last_executed_node") or "")
+    n8n_status = str(result.get("n8n_status") or "").lower()
+    if n8n_status == "success" and last_node and last_node not in TERMINAL_FACTORY_NODES:
+        expected = str(result.get("expected_next_node") or HANDOFF_NEXT.get(last_node) or "terminal factory stage")
+        return (
+            "NEEDS_REVIEW",
+            f"incomplete_factory_success last={last_node} expected_next={expected} missing handoff",
+        )
     transport = str(result.get("transport_status") or "")
     if transport in {"FAILED", "NON_JSON_RESPONSE", "TIMEOUT"}:
         return "NEEDS_REVIEW", f"Factory transport failed: {result.get('reason', 'UNKNOWN')}"
@@ -875,12 +926,16 @@ def run_project(project_id: str, submitter: Callable[[dict[str, object]], dict[s
             transport = str(result.get("transport_status") or "")
             stage = "Factory Submission" if transport else "Product Factory"
             last_success = "Work Unit Packaging" if transport else "Factory webhook accepted"
-            if current.get("factory_execution_id") and transport:
+            expected_next = result.get("expected_next_node")
+            if result.get("last_executed_node"):
+                last_success = str(result["last_executed_node"])
+                stage = str(expected_next or HANDOFF_NEXT.get(last_success) or "missing factory handoff")
+            elif current.get("factory_execution_id") and transport:
                 last_success = "Director Sprint Input"
                 stage = "Factory webhook response"
             current["diagnosis"] = None if unit_status == "DONE" else build_diagnosis(
                 state, current, status=unit_status, summary=summary, stage=stage, last_success=last_success,
-                execution_id=current.get("factory_execution_id"),
+                execution_id=current.get("factory_execution_id"), expected_next=expected_next,
             )
             if unit_status == "FAILED":
                 previous = current.get("failure_signature")
@@ -952,15 +1007,20 @@ def is_unproven_transport_review(unit: dict[str, object]) -> bool:
 def is_infrastructure_routing_review(unit: dict[str, object]) -> bool:
     if unit.get("status") != "NEEDS_REVIEW" or unit.get("qa_status") not in {None, "NOT_VERIFIED"}:
         return False
-    stage = str((unit.get("diagnosis") or {}).get("stage") or "")
+    diagnosis = unit.get("diagnosis") if isinstance(unit.get("diagnosis"), dict) else {}
+    stage = str(diagnosis.get("stage") or "")
     error = str(unit.get("last_error") or unit.get("outcome_summary") or "")
-    blob = f"{stage} {error}".lower()
+    blob = f"{stage} {error} {diagnosis.get('last_success_stage') or ''} {diagnosis.get('expected_next_stage') or ''}".lower()
     return (
         stage == "Provider Success Router"
         or "provider_role_unknown" in blob
         or "tamamlanan factory rolü" in blob
         or "completed provider role was unknown" in blob
         or ("unknown" in blob and "provider success" in blob)
+        or "incomplete_factory_success" in blob
+        or "missing handoff" in blob
+        or stage == "Normalize Specialist Result"
+        or ("specialist" in blob and "normalize specialist" in blob)
     )
 
 

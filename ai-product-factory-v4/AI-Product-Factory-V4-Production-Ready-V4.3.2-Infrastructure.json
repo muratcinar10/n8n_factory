@@ -3327,112 +3327,112 @@
           {
             "node": "Analyst NVIDIA Fallback",
             "type": "main",
-            "index": 1
+            "index": 0
           }
         ],
         [
           {
             "node": "Analyst Groq Fallback",
             "type": "main",
-            "index": 2
+            "index": 0
           }
         ],
         [
           {
             "node": "Specialist",
             "type": "main",
-            "index": 3
+            "index": 0
           }
         ],
         [
           {
             "node": "Specialist Fallback",
             "type": "main",
-            "index": 4
+            "index": 0
           }
         ],
         [
           {
             "node": "Specialist Groq Fallback",
             "type": "main",
-            "index": 5
+            "index": 0
           }
         ],
         [
           {
             "node": "Planner",
             "type": "main",
-            "index": 6
+            "index": 0
           }
         ],
         [
           {
             "node": "Planner NVIDIA Alternate",
             "type": "main",
-            "index": 7
+            "index": 0
           }
         ],
         [
           {
             "node": "Planner Groq Fallback",
             "type": "main",
-            "index": 8
+            "index": 0
           }
         ],
         [
           {
             "node": "Consistency Reviewer",
             "type": "main",
-            "index": 9
+            "index": 0
           }
         ],
         [
           {
             "node": "Consistency NVIDIA Alternate",
             "type": "main",
-            "index": 10
+            "index": 0
           }
         ],
         [
           {
             "node": "Consistency Groq Fallback",
             "type": "main",
-            "index": 11
+            "index": 0
           }
         ],
         [
           {
             "node": "QA Lead",
             "type": "main",
-            "index": 12
+            "index": 0
           }
         ],
         [
           {
             "node": "QA Lead NVIDIA Alternate",
             "type": "main",
-            "index": 13
+            "index": 0
           }
         ],
         [
           {
             "node": "QA Lead Groq Fallback",
             "type": "main",
-            "index": 14
+            "index": 0
           }
         ],
         [
           {
             "node": "Provider Recovery Controller",
             "type": "main",
-            "index": 15
+            "index": 0
           }
         ],
         [
           {
             "node": "Normalize Technical Failure",
             "type": "main",
-            "index": 16
+            "index": 0
           }
         ]
       ]

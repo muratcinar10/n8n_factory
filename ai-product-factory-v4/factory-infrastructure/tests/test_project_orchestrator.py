@@ -446,5 +446,59 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(["W193"], visible["open_ids"]["DEFERRED"])
 
 
+    def test_n8n_success_at_specialist_is_not_done(self):
+        merged = orchestrator.merge_execution_snapshot(
+            {"transport_status": "FAILED", "reason": "empty_factory_response"},
+            {
+                "id": "94",
+                "status": "success",
+                "finished": True,
+                "data": {"resultData": {"lastNodeExecuted": "Specialist"}},
+            },
+        )
+        self.assertNotIn("sprint_report", merged)
+        self.assertEqual("FAILED", merged["transport_status"])
+        self.assertIn("incomplete_factory_success", merged["reason"])
+        self.assertEqual("Specialist", merged["last_executed_node"])
+        self.assertEqual("Normalize Specialist Result", merged["expected_next_node"])
+        status, summary = orchestrator.classify_result(merged)
+        self.assertEqual("NEEDS_REVIEW", status)
+        self.assertNotEqual("DONE", status)
+        self.assertIn("Normalize Specialist Result", summary)
+        tr = orchestrator.diagnosis_tr(summary, "Normalize Specialist Result")
+        self.assertIn("beklenen geçiş", tr)
+
+    def test_n8n_success_is_not_done_without_terminal_contract(self):
+        status, _summary = orchestrator.classify_result({
+            "sprint_report": {"status": "COMPLETED", "qa_result": "PASS", "qa_lead_result": "QA_APPROVED", "skipped_or_deferred_tasks": []},
+            "n8n_status": "success",
+            "last_executed_node": "Specialist",
+            "expected_next_node": "Normalize Specialist Result",
+        })
+        self.assertEqual("NEEDS_REVIEW", status)
+
+    def test_keep_running_still_wins_over_last_node(self):
+        status, summary = orchestrator.classify_result({
+            "keep_running": True,
+            "last_executed_node": "Specialist",
+            "factory_execution_id": "95",
+        })
+        self.assertEqual("RUNNING", status)
+        self.assertIn("still running", summary)
+
+    def test_specialist_handoff_review_is_infrastructure(self):
+        unit = {
+            "status": "NEEDS_REVIEW",
+            "qa_status": None,
+            "last_error": "incomplete_factory_success last=Specialist expected_next=Normalize Specialist Result missing handoff",
+            "diagnosis": {
+                "stage": "Normalize Specialist Result",
+                "last_success_stage": "Specialist",
+                "expected_next_stage": "Normalize Specialist Result",
+            },
+        }
+        self.assertTrue(orchestrator.is_infrastructure_routing_review(unit))
+
+
 if __name__ == "__main__":
     unittest.main()
