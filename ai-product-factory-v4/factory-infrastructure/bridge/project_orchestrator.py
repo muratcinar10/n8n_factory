@@ -108,6 +108,19 @@ def diagnosis_tr(summary: str, stage: str, result: dict[str, object] | None = No
         return "MiniMax kullanılamadı. Laguna öneri üretici olarak çağrıldı; uygulanan dosya kanıtı üretmez."
     if "cursor" in text_value and ("timeout" in text_value or "unauthenticated" in text_value or "unavailable" in text_value):
         return "Cursor uygulayıcı teknik olarak tamamlanamadı. Codex yedek applied Developer yoluna düşülebilir."
+    if (
+        stage == "Director Sprint Input"
+        or (
+            not payload.get("factory_execution_id")
+            and "timeout" in text_value
+            and stage in {"Factory webhook response", "Factory Submission"}
+        )
+        or (
+            stage == "Factory webhook response"
+            and any(token in text_value for token in ("crashed", "unknown_node", "cancelled", "canceled"))
+        )
+    ):
+        return "Director Sprint Input aşamasında execution ilerlemedi."
     if "jsondecodeerror" in text_value or "non_json" in text_value or "empty_factory_response" in text_value:
         return "Product Factory geçerli bir JSON sonuç döndürmedi. Gönderim başlamış olabilir; webhook hata yolunda yanıt düğümüne ulaşmadı."
     if (
@@ -248,6 +261,7 @@ def stuck_stage_tr(stage: str, summary: str, last_success: str = "") -> str:
         "Recovery Controller": "Developer seçimi",
         "Factory Submission": "Factory gönderimi",
         "Factory webhook response": "Factory webhook yanıtı",
+        "Director Sprint Input": "Director Sprint Input",
     }
     return labels.get(stage, stage)
 
@@ -862,6 +876,7 @@ def correlate_timeout(brief: dict[str, object]) -> dict[str, object] | None:
     history = {str(item) for item in (brief.get("historical_execution_ids") or []) if item}
     marker = f"{brief.get('project_id')}:{brief.get('work_unit_id')}"
     sprint = str(brief.get("sprint_id") or "")
+    running: list[dict[str, object]] = []
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -874,6 +889,10 @@ def correlate_timeout(brief: dict[str, object]) -> dict[str, object] | None:
         blob = json.dumps(snapshot, ensure_ascii=False)[:20_000]
         if marker in blob or (sprint and sprint in blob):
             return snapshot
+        if str(snapshot.get("status") or "").lower() in {"running", "waiting", "new"}:
+            running.append(snapshot)
+    if len(running) == 1:
+        return running[0]
     return None
 
 
@@ -1290,6 +1309,12 @@ def is_infrastructure_routing_review(unit: dict[str, object]) -> bool:
         or "technical_timeout" in blob
         or "connection was aborted" in blob
         or ("factory transport failed" in blob and "timeout" in blob)
+        or stage == "Director Sprint Input"
+        or (
+            stage == "Factory webhook response"
+            and any(token in blob for token in ("crashed", "unknown_node", "cancelled", "canceled", "ilerlemedi"))
+        )
+        or "director sprint input aşamasında" in blob
         or "developer pool exhausted" in blob
         or "provider_not_found" in blob
         or "model_unavailable" in blob

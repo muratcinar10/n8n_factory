@@ -577,6 +577,33 @@ class OrchestratorTests(unittest.TestCase):
         }
         self.assertTrue(orchestrator.is_infrastructure_routing_review(timeout_unit))
 
+    def test_director_sprint_input_hang_is_turkish_and_infrastructure(self):
+        self.assertEqual(
+            "Director Sprint Input aşamasında execution ilerlemedi.",
+            orchestrator.diagnosis_tr("TimeoutError", "Factory webhook response"),
+        )
+        self.assertEqual(
+            "Director Sprint Input aşamasında execution ilerlemedi.",
+            orchestrator.diagnosis_tr("unknown_node: crashed", "Factory webhook response"),
+        )
+        self.assertEqual(
+            "Director Sprint Input aşamasında execution ilerlemedi.",
+            orchestrator.diagnosis_tr("controlled hang", "Director Sprint Input"),
+        )
+        self.assertEqual("Director Sprint Input", orchestrator.stuck_stage_tr("Director Sprint Input", "unknown_node: crashed"))
+        hang = {
+            "status": "NEEDS_REVIEW",
+            "qa_status": None,
+            "factory_execution_id": "107",
+            "last_error": "unknown_node: crashed",
+            "diagnosis": {
+                "stage": "Factory webhook response",
+                "last_success_stage": "Director Sprint Input",
+                "summary_tr": "Director Sprint Input aşamasında execution ilerlemedi.",
+            },
+        }
+        self.assertTrue(orchestrator.is_infrastructure_routing_review(hang))
+
     def test_developer_fallback_review_is_infrastructure(self):
         hangman_style = {
             "status": "NEEDS_REVIEW",
@@ -679,6 +706,30 @@ class OrchestratorTests(unittest.TestCase):
         self.assertTrue(orchestrator._is_transport_timeout(orchestrator.URLError("timed out")))
         self.assertFalse(orchestrator._is_transport_timeout(orchestrator.URLError("connection refused")))
 
+
+
+    def test_correlate_timeout_uses_unique_running_factory_execution(self):
+        from unittest import mock
+        rows = [
+            {"id": "106", "status": "crashed", "finished": True},
+            {"id": "107", "status": "running", "finished": False},
+        ]
+        brief = {
+            "project_id": "PROJECT-HANGMAN-PILOT-001",
+            "work_unit_id": "W001",
+            "sprint_id": "PROJECT-HANGMAN-PILOT-001-W001-1",
+            "historical_execution_ids": ["105", "106"],
+        }
+        with mock.patch.object(orchestrator, "n8n_request", return_value=None), mock.patch.object(
+            orchestrator, "n8n_db_execution_rows", return_value=rows
+        ), mock.patch.object(orchestrator, "n8n_execution_snapshot", side_effect=lambda eid: next(r for r in rows if r["id"] == eid)):
+            matched = orchestrator.correlate_timeout(brief)
+        self.assertEqual("107", matched["id"])
+        with mock.patch.object(orchestrator, "n8n_request", return_value=None), mock.patch.object(
+            orchestrator, "n8n_db_execution_rows",
+            return_value=rows + [{"id": "108", "status": "running", "finished": False}],
+        ), mock.patch.object(orchestrator, "n8n_execution_snapshot", side_effect=lambda eid: {"id": eid, "status": "running", "finished": False}):
+            self.assertIsNone(orchestrator.correlate_timeout(brief))
 
 
 if __name__ == "__main__":
