@@ -1,50 +1,45 @@
 # Project Orchestrator
 
-## Architecture
+A **Project** is a durable queue of Work Units. A **Sprint** is one factory execution of **one** Work Unit. The Product Factory must never receive an entire product as one giant development task.
 
-Director → ChatGPT Master Plan → `127.0.0.1:8787` Director Control → immutable plan → mutable queue → one eligible Work Unit → existing 61-node Factory → QA/QA Lead/Inspector evidence → next eligible Work Unit.
+ChatGPT / the Director decomposes the product. This orchestrator is a deterministic scheduler: validate, persist, package, submit one eligible unit, record evidence, continue.
 
-ChatGPT decomposes the product. The local controller only validates, persists, selects, packages, dispatches, and records. It does not use an LLM, split/merge units, invent requirements, or rewrite acceptance criteria.
+## Accepted Director path
 
-## Schema 1.0
+ChatGPT prepares a Project Master Plan → human pastes once at [http://127.0.0.1:8787](http://127.0.0.1:8787) → Local Project Orchestrator → one Work Unit → existing 61-node Product Factory → result → next eligible unit.
 
-The exact project fields are `schema_version`, `project_id`, `project_name`, `project_goal`, `global_context`, and `work_units`. `global_context` contains `summary`, `architecture`, `constraints`, `forbidden_actions`, and `completion_criteria`.
+## Optional future path
 
-Each unit contains `work_unit_id`, `title`, `objective`, `context`, `dependencies`, `allowed_scope`, `forbidden_scope`, `acceptance_criteria`, `test_requirements`, `expected_artifacts`, and numeric `priority`. Priority 1 is highest. Eligible units are selected by ascending priority, then ascending normalized Work Unit ID.
+Authenticated Director Bridge (`127.0.0.1:8765`) may submit the **same** Master Plan contract. External ChatGPT → localhost is not required for the first real product.
 
-Validation rejects missing/unknown fields, duplicate or malformed IDs, unknown/self/circular dependencies, empty acceptance criteria, invalid priority, unsafe absolute/parent/protected paths, workflow/writer/shell control fields, empty plans, more than 500 units, or input larger than 256 KiB. Text is data, never executable authority.
+## Schema `1.0`
+
+Required: `schema_version`, `project_id`, `work_units`, `global_constraints`, `global_forbidden_actions`, plus a title (`project_title` or `project_name`), a goal (`project_goal` or string `global_context`), and completion criteria (`completion_criteria` or `definition_of_done`).
+
+Each Work Unit requires: `work_unit_id`, `title`, goal (`goal` or `objective`), `context`, `dependencies`, `acceptance_criteria`, `test_requirements`.
+
+Optional: `allowed_files` / `allowed_scope`, `forbidden_files` / `forbidden_scope`, unit `forbidden_actions`, `related_components`, `notes`, `priority`.
+
+Rejected: duplicate/self/missing/cyclic dependencies, privileged control fields (`workflow_id`, `shell_command`, credentials, Host Writer, MI), absolute/`..` paths, oversized plans.
 
 See `EXAMPLE_PROJECT_MASTER_PLAN.json`.
 
-## Four controls
+## State machine
 
-1. **VALIDATE** parses and validates only. It persists and executes nothing.
-2. **LOAD** requires the same valid plan, writes an immutable canonical plan under `bridge/state/plans`, and creates separate mutable state under `bridge/state`. It does not start production and fails closed if the ID conflicts.
-3. **START** accepts only the loaded `project_id`, starts it once, and never rewrites the immutable plan.
-4. **RESUME** applies only to `PAUSED_HUMAN_AUTH`; it skips completed/unresolved units and never blindly duplicates an ambiguous running dispatch.
+`PENDING` → `READY` → `RUNNING` → `DONE` | `NEEDS_REVIEW` | `DEFERRED`
 
-## State and completion
+Technical `FAILED` with the same failure signature is retried until **3** factory submissions, then `NEEDS_REVIEW`. There is no fourth attempt. Factory `RECOVERY_EXHAUSTED` becomes `DEFERRED` immediately. Dependents of unresolved units become `BLOCKED`; independent units continue. Sequence order, one `RUNNING` unit, no parallelism.
 
-Unit states: `PENDING`, `READY`, `RUNNING`, `DONE`, `FAILED`, `NEEDS_REVIEW`, `DEFERRED`, `BLOCKED`.
+Project: `VALIDATED` → `RUNNING` → `COMPLETED` | `COMPLETED_WITH_OPEN_ITEMS` | `NEEDS_REVIEW` | `FAILED` | `PAUSED`.
 
-Dependencies must all be `DONE`. Multiple units may be ready, but conservative mode permits one running project and one active Work Unit globally. A failed branch blocks its dependents; independent eligible units continue.
+## Persistence / resume
 
-`DONE` requires Factory `COMPLETED`, deterministic QA `PASS`, QA Lead `QA_APPROVED`, and zero open items. Terminal technical failure becomes `FAILED`; ambiguous or incomplete evidence becomes `NEEDS_REVIEW`. Factory's bounded maximum-three recovery remains authoritative; the controller adds no retry loop. `DEFERRED` and review/failure evidence remain durable.
+Atomic JSON: `factory-infrastructure/bridge/state/<project_id>.json` and immutable `state/plans/<project_id>.json`. Survives browser and service restart. Unknown `RUNNING` after crash → `NEEDS_REVIEW` + `PAUSED` (not redispatched). DONE units are never resubmitted.
 
-Project results are `COMPLETED`, `COMPLETED_WITH_OPEN_ITEMS`, or `FAILED_NO_PROGRESS`. Exact unresolved IDs remain visible.
+## Director Console
 
-## Bounded package and evidence
+Open `http://127.0.0.1:8787` (bind `127.0.0.1` only). Paste plan → **VALIDATE PLAN** → **START PROJECT**. Optional pause-after-current / resume. No n8n editing, Terminal, curl, per-unit clicks, shell, credentials, or workflow IDs.
 
-Each dispatch contains identity, unit objective/scope, bounded summary/architecture, global constraints, direct dependency outcomes, acceptance criteria, tests, expected artifacts, and fixed allowed/forbidden action policy. It excludes the full Master Plan, unrelated history, prompts, and chain-of-thought.
+Start services: `./factory-infrastructure/start_factory_console.sh`.
 
-Mutable state retains timestamps, stable dispatch ID, attempt count, factory execution ID when returned, QA and QA Lead state, Inspector score, bounded acceptance evidence, and failure reason. Atomic writes use `fsync` and same-filesystem replace.
-
-On restart, an ambiguous `RUNNING` unit becomes `NEEDS_REVIEW` and the project becomes `PAUSED_HUMAN_AUTH`. It is not redispatched.
-
-## Local UI and security
-
-The combined Turkish Director Control, project dashboard, Work Unit table, and read-only 61-node Factory view are at `http://127.0.0.1:8787`. The Bridge backend remains at `127.0.0.1:8765`. Start both with `factory-infrastructure/start_factory_console.sh`.
-
-The monitor proxies only allowlisted project operations to the same controller. Browser requests use a process-local HttpOnly SameSite cookie; the internal bearer token is never placed in HTML, JavaScript, telemetry, or localStorage. There is no workflow selector, shell, filesystem browser, arbitrary HTTP, credential, model, prompt, MI, or raw n8n endpoint.
-
-Future authenticated ChatGPT integration can feed the same validation/controller contract. It is not required for current operation.
+Factory webhook is fixed: `http://127.0.0.1:5678/webhook/ai-product-factory-v4-sprint`. Packaged briefs include `project_id` and `work_unit_id`, not the full Master Plan. Target remains allowlisted (`SMOKE_FIXTURE` until a later human-authorized change). Inspector observes; it does not steer the queue.

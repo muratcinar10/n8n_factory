@@ -18,7 +18,6 @@ from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent
 ASSETS = ROOT / "assets"
-CONSOLE_ASSETS = ROOT.parent / "bridge" / "console"
 TELEMETRY = ROOT / "telemetry" / "latest.json"
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("FACTORY_MONITOR_PORT", "8787"))
@@ -118,15 +117,13 @@ class MonitorHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        console_asset = {"/": "index.html", "/console.js": "console.js", "/console.css": "console.css"}.get(path)
-        monitor_asset = {"/factory-floor": "index.html", "/app.js": "app.js", "/styles.css": "styles.css"}.get(path)
-        asset = console_asset or monitor_asset
+        asset = {"/": "index.html", "/factory-floor": "index.html", "/app.js": "app.js", "/styles.css": "styles.css"}.get(path)
         if not asset:
             self.send_error(404)
             return
-        body = ((CONSOLE_ASSETS if console_asset else ASSETS) / asset).read_bytes()
+        body = (ASSETS / asset).read_bytes()
         self.send_response(200)
-        self.headers_common(mimetypes.guess_type(asset)[0] or "application/octet-stream", len(body), session_cookie=path == "/")
+        self.headers_common(mimetypes.guess_type(asset)[0] or "application/octet-stream", len(body), session_cookie=path in {"/", "/factory-floor"})
         self.end_headers()
         self.wfile.write(body)
 
@@ -148,9 +145,14 @@ class MonitorHandler(BaseHTTPRequestHandler):
             return
         self.proxy_project("POST", path, self.rfile.read(length))
 
-    do_PUT = do_POST
-    do_PATCH = do_POST
-    do_DELETE = do_POST
+    def do_PUT(self) -> None:
+        self.send_error(405)
+
+    def do_PATCH(self) -> None:
+        self.send_error(405)
+
+    def do_DELETE(self) -> None:
+        self.send_error(405)
 
 
 def main() -> None:

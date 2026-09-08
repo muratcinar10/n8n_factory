@@ -1,54 +1,76 @@
 {
   "schema_version": "1.0",
   "project_id": "PROJECT-SYNTHETIC-001",
-  "project_name": "Sentetik Orchestrator Testi",
-  "project_goal": "Gerçek ürün oluşturmadan bağımlılık sırasını doğrulamak.",
-  "global_context": {
-    "summary": "Yalnız çevrimdışı testlerde kullanılan sentetik plan.",
-    "architecture": "Üç küçük ve sıralı doğrulama birimi.",
-    "constraints": ["Yalnız sentetik kanıt kullan"],
-    "forbidden_actions": ["Market Intelligence erişimi yok", "Host Writer işi yok", "Credential erişimi yok"],
-    "completion_criteria": ["Üç birim doğru sırada deterministik terminal duruma ulaşır"]
-  },
+  "project_name": "Synthetic Orchestrator Fixture",
+  "project_goal": "Prove Work Unit eligibility without building a product.",
+  "global_constraints": [
+    "Synthetic evidence only",
+    "Do not write product files"
+  ],
+  "global_forbidden_actions": [
+    "Market Intelligence access",
+    "Host Writer production jobs",
+    "Credential access",
+    "Arbitrary workflow execution"
+  ],
+  "definition_of_done": [
+    "All eligible synthetic units reach deterministic terminal states"
+  ],
   "work_units": [
     {
       "work_unit_id": "W001",
-      "title": "Sözleşmeyi Doğrula",
-      "objective": "Plan sözleşmesini çevrimdışı doğrula.",
-      "context": "Gerçek yürütme yapmayan sentetik fixture.",
+      "title": "Bootstrap eligibility",
+      "objective": "Establish the root Work Unit with no dependencies.",
       "dependencies": [],
+      "context": "Harmless synthetic fixture. No product implementation.",
       "allowed_scope": ["sandbox/W001.txt"],
       "forbidden_scope": ["protected.txt"],
-      "acceptance_criteria": ["Sözleşme kabul edilir"],
-      "test_requirements": ["Çevrimdışı birim testi"],
-      "expected_artifacts": ["sandbox/W001.txt"],
-      "priority": 1
+      "acceptance_criteria": ["W001 is selected first"],
+      "test_requirements": ["Injected submitter records W001"]
     },
     {
       "work_unit_id": "W002",
-      "title": "Bağımlılığı Doğrula",
-      "objective": "W001 tamamlanmadan seçilmediğini doğrula.",
-      "context": "W001 sonucuna bağlı sentetik fixture.",
+      "title": "Depend on W001",
+      "objective": "Become READY only after W001 is DONE.",
       "dependencies": ["W001"],
+      "context": "Harmless synthetic fixture.",
       "allowed_scope": ["sandbox/W002.txt"],
       "forbidden_scope": ["protected.txt"],
-      "acceptance_criteria": ["W002, W001'den önce seçilmez"],
-      "test_requirements": ["Çevrimdışı sıra testi"],
-      "expected_artifacts": ["sandbox/W002.txt"],
-      "priority": 2
+      "acceptance_criteria": ["W002 is not selected before W001"],
+      "test_requirements": ["Injected submitter records order"]
     },
     {
       "work_unit_id": "W003",
-      "title": "Sonucu Doğrula",
-      "objective": "Terminal proje sınıflandırmasını doğrula.",
-      "context": "W002 sonucuna bağlı sentetik fixture.",
-      "dependencies": ["W002"],
+      "title": "Independent sibling of W002",
+      "objective": "Become READY after W001 without waiting for W002.",
+      "dependencies": ["W001"],
+      "context": "Harmless synthetic fixture.",
       "allowed_scope": ["sandbox/W003.txt"],
       "forbidden_scope": ["protected.txt"],
-      "acceptance_criteria": ["Proje doğru terminal duruma ulaşır"],
-      "test_requirements": ["Çevrimdışı sonuç testi"],
-      "expected_artifacts": ["sandbox/W003.txt"],
-      "priority": 3
+      "acceptance_criteria": ["W003 may run after W001 even if W002 failed"],
+      "test_requirements": ["Injected submitter records independent progress"]
+    },
+    {
+      "work_unit_id": "W004",
+      "title": "Depend on W002",
+      "objective": "Remain blocked if W002 is not DONE.",
+      "dependencies": ["W002"],
+      "context": "Harmless synthetic fixture.",
+      "allowed_scope": ["sandbox/W004.txt"],
+      "forbidden_scope": ["protected.txt"],
+      "acceptance_criteria": ["W004 waits for W002 DONE"],
+      "test_requirements": ["State machine records BLOCKED when W002 fails"]
+    },
+    {
+      "work_unit_id": "W005",
+      "title": "Depend on W003",
+      "objective": "Become READY only after W003 is DONE.",
+      "dependencies": ["W003"],
+      "context": "Harmless synthetic fixture.",
+      "allowed_scope": ["sandbox/W005.txt"],
+      "forbidden_scope": ["protected.txt"],
+      "acceptance_criteria": ["W005 waits for W003 DONE"],
+      "test_requirements": ["Injected submitter records W005 after W003"]
     }
   ]
 }

@@ -1,10 +1,8 @@
 # Director Bridge
 
-The Bridge also hosts the Local Director Console and deterministic Project Orchestrator. See `DIRECTOR_CONSOLE.md` and `PROJECT_ORCHESTRATOR.md`. The original narrow `/v1/start_sprint` API remains intact; external ChatGPT direct invocation is an optional future enhancement, not a first-product blocker.
-
 The Director Bridge is a local-only, narrow adapter between a Director-facing client and the fixed AI Product Factory webhook. It is not an n8n proxy and exposes no workflow IDs, shell, filesystem, credentials, Market Intelligence, or arbitrary HTTP access.
 
-It also hosts the Local Director Console and deterministic Project Orchestrator. See `DIRECTOR_CONSOLE.md` and `PROJECT_ORCHESTRATOR.md`. The original narrow `/v1/start_sprint` API remains intact; external ChatGPT direct invocation is an optional future enhancement, not a first-product blocker.
+Normal Director operation uses the Local Director Console at `http://127.0.0.1:8787` (see `PROJECT_ORCHESTRATOR.md`). The Bridge remains an optional API at `127.0.0.1:8765` for the same Project Master Plan contract and the original `/v1/start_sprint` methods. External ChatGPT → localhost is optional and not required for the first real product.
 
 ## Methods
 
@@ -24,7 +22,7 @@ Start locally with a token supplied only in the process environment:
 FACTORY_BRIDGE_TOKEN='<local-secret>' python3 factory-infrastructure/bridge/director_bridge.py
 ```
 
-The parent workflow must be explicitly activated by a human before production webhook execution is possible. This repository does not activate it.
+The parent workflow webhook is used only when that workflow is active in local n8n. Callers still cannot choose a workflow ID.
 
 ## External ChatGPT requirement
 

@@ -1,15 +1,8 @@
 <!doctype html>
-<html lang="tr">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AI Ürün Fabrikası — Yönetim Masası</title><link rel="stylesheet" href="/console.css"></head>
-<body><main>
-  <header><div><p class="eyebrow">YEREL AI ÜRÜN FABRİKASI</p><h1>Proje Yönetim Masası</h1><p>ChatGPT'nin hazırladığı Ana Proje Planı'nı bir kez yapıştırın. Sistem yalnızca uygun olan tek bir iş birimini sırayla fabrikaya gönderir.</p></div><div class="durum" id="ust-durum">HAZIR / BOŞTA</div></header>
-
-  <section class="panel giris"><h2>Director Inbox — Ana Proje Planı</h2><label for="manifest">Yapılandırılmış JSON proje planı</label><textarea id="manifest" spellcheck="false" placeholder='{"schema_version":"1.0", "project_id":"PROJECT-001", "project_name":"...", "work_units":[...]}'></textarea><div class="actions"><button id="validate">Planı Doğrula</button><button id="load">Projeyi Yükle</button><button id="start" disabled>Projeyi Başlat</button><button id="pause" disabled>Geçerli İşten Sonra Duraklat</button><button id="resume" disabled>Projeyi Sürdür</button></div><p id="message">Plan bekleniyor. Doğrulama ve yükleme üretimi başlatmaz.</p></section>
-
-  <section class="summary"><div><span>Proje</span><strong id="project">—</strong></div><div><span>Durum</span><strong id="status">BOŞTA</strong></div><div><span>Başlangıç</span><strong id="started">—</strong></div><div><span>İlerleme</span><strong id="progress">0 / 0</strong></div><div><span>Tamamlanan</span><strong id="done">0</strong></div><div><span>Başarısız</span><strong id="fail-count">0</strong></div><div><span>İnceleme</span><strong id="review-count">0</strong></div><div><span>Proje Sağlığı</span><strong id="health">—</strong></div></section>
-
-  <section class="panel"><h2 id="current">Geçerli İş Birimi: —</h2><div class="actions filters" aria-label="Kuyruk filtreleri"><button data-filter="ALL">Tümü</button><button data-filter="RUNNING">Aktif</button><button data-filter="DONE">Tamamlandı</button><button data-filter="FAILED">Başarısız</button><button data-filter="NEEDS_REVIEW">İnceleme Gerekli</button><button data-filter="DEFERRED">Ertelendi</button><button data-filter="BLOCKED">Engellendi</button></div><div class="table"><table><thead><tr><th>Kimlik</th><th>Başlık</th><th>Öncelik</th><th>Bağımlılıklar</th><th>Durum</th><th>Sonuç</th><th>Güncelleme</th></tr></thead><tbody id="units"></tbody></table></div><div class="open-items"><p><strong>Başarısız:</strong> <span id="failed">—</span></p><p><strong>İnceleme gerekli:</strong> <span id="review">—</span></p><p><strong>Engellenen:</strong> <span id="blocked">—</span></p><p><strong>Ertelenen:</strong> <span id="deferred">—</span></p></div></section>
-
-  <section class="panel fabrika"><div class="section-title"><div><p class="eyebrow">AYNI SAYFADA CANLI GÖRÜNÜM</p><h2>61 Aşamalı Fabrika Ekranı</h2><p>Bu bölüm salt okunur gerçek telemetriyi gösterir; kontrol veya uydurma düşünme bilgisi içermez.</p></div><div id="factory-status" class="durum">BEKLİYOR</div></div><section class="summary factory-summary"><div><span>Sprint</span><strong id="sprint-id">Henüz gözlenmedi</strong></div><div><span>Geçerli aşama</span><strong id="factory-stage">—</strong></div><div><span>Güncelleme</span><strong id="factory-updated">—</strong></div><div><span>Denetçi puanı</span><strong id="factory-score">—</strong></div></section><p id="factory-message">Yerel telemetri yükleniyor…</p><div class="table"><table><thead><tr><th>Aşama</th><th>Geçerli / son etkinlik</th><th>Güncelleme</th></tr></thead><tbody id="factory-nodes"></tbody></table></div></section>
-</main><script src="/console.js" defer></script></body>
+<html lang="en">
+<head><meta charset="utf-8"><title>Director Bridge</title></head>
+<body>
+  <p>The Director Console lives at <a href="http://127.0.0.1:8787">http://127.0.0.1:8787</a>.</p>
+  <p>This port remains the optional local Bridge API: start_sprint, get_sprint_status, get_sprint_result, and the same Project Master Plan methods.</p>
+</body>
 </html>

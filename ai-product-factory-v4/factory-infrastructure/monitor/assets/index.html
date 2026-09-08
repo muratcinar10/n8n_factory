@@ -1,41 +1,106 @@
 <!doctype html>
-<html lang="en">
+<html lang="tr">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>AI Product Factory — Factory Floor</title>
+  <title>AI Ürün Fabrikası — Direktör Konsolu</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <main>
     <header>
       <div>
-        <p class="eyebrow">LOCAL FACTORY MONITOR</p>
-        <h1>Factory Floor</h1>
+        <p class="eyebrow">YEREL FABRİKA İZLEME</p>
+        <h1>Direktör Konsolu + Fabrika Katı</h1>
+        <p class="lede">Yapılandırılmış Proje Ana Planını bir kez yapıştırın. Yerel proje yöneticisi İş Birimlerini sıraya koyar. Aşağıdaki 61 aşamalı tablo salt okunurdur.</p>
       </div>
-      <div class="header-actions">
-        <a class="back" href="http://127.0.0.1:8765">&larr; Director Console</a>
-        <div id="factory-status" class="status WAITING">WAITING</div>
-      </div>
+      <div id="factory-status" class="status WAITING">BEKLİYOR</div>
     </header>
-    <section class="summary project-summary" aria-label="Project summary">
-      <div><span>Project</span><strong id="project-title">No project loaded</strong></div>
-      <div><span>Project status</span><strong id="project-status">—</strong></div>
-      <div><span>Work Units</span><strong id="project-progress">0 / 0 DONE</strong></div>
-      <div><span>Current Work Unit</span><strong id="current-work-unit">—</strong></div>
-      <div><span>Project health</span><strong id="project-health">—</strong></div>
-      <div><span>Failures / review</span><strong id="project-failures">—</strong></div>
+
+    <section class="panel intake" aria-label="Direktör Konsolu">
+      <h2>PROJE PLANI</h2>
+      <label for="manifest">Yapılandırılmış Proje Ana Planı (JSON)</label>
+      <textarea id="manifest" spellcheck="false" placeholder='{"schema_version":"1.0","project_id":"PROJECT-001","project_name":"...","work_units":[...]}'></textarea>
+      <div class="actions">
+        <button id="validate" type="button">PLANI DOĞRULA</button>
+        <button id="start" type="button" disabled>PROJEYİ BAŞLAT</button>
+        <button id="pause" type="button" disabled>MEVCUT İŞ BİRİMİNDEN SONRA DURAKLAT</button>
+        <button id="resume" type="button" disabled>PROJEYE DEVAM ET</button>
+      </div>
+      <pre id="validation" class="message">Bir Ana Plan yapıştırın, ardından PLANI DOĞRULA. Üretimi yalnızca PROJEYİ BAŞLAT başlatır.</pre>
     </section>
-    <section class="summary" aria-label="Sprint summary">
-      <div><span>Sprint</span><strong id="sprint-id">No sprint observed</strong></div>
-      <div><span>Current stage</span><strong id="current-stage">—</strong></div>
-      <div><span>Updated</span><strong id="updated-at">—</strong></div>
-      <div><span>Inspector score</span><strong id="factory-score">—</strong></div>
+
+    <section class="summary project-summary" aria-label="Proje özeti">
+      <div><span>Proje</span><strong id="project-title">Proje yüklenmedi</strong></div>
+      <div><span>Durum</span><strong id="project-status">—</strong></div>
+      <div><span>İş Birimleri</span><strong id="project-progress">0 / 0 TAMAMLANDI</strong></div>
+      <div><span>HAZIR</span><strong id="count-ready">0</strong></div>
+      <div><span>ÇALIŞIYOR</span><strong id="count-running">0</strong></div>
+      <div><span>TAMAMLANDI</span><strong id="count-done">0</strong></div>
+      <div><span>BAŞARISIZ</span><strong id="count-failed">0</strong></div>
+      <div><span>İNCELEME GEREKİYOR</span><strong id="count-review">0</strong></div>
+      <div><span>ERTELENDİ</span><strong id="count-deferred">0</strong></div>
+      <div><span>BLOKE</span><strong id="count-blocked">0</strong></div>
+      <div><span>BEKLİYOR</span><strong id="count-pending">0</strong></div>
+      <div><span>Başlangıç</span><strong id="project-started">—</strong></div>
+      <div><span>Son güncelleme</span><strong id="project-updated">—</strong></div>
     </section>
-    <p id="connection-state" class="connection">Loading local telemetry…</p>
+
+    <section class="panel current-unit" aria-label="Mevcut İş Birimi">
+      <h2>MEVCUT İŞ BİRİMİ</h2>
+      <p id="current-work-unit">—</p>
+      <div class="summary current-grid">
+        <div><span>Mevcut aşama</span><strong id="current-stage">—</strong></div>
+        <div><span>Deneme</span><strong id="current-attempt">—</strong></div>
+        <div><span>Başlangıç</span><strong id="current-started">—</strong></div>
+        <div><span>Denetçi puanı</span><strong id="factory-score">—</strong></div>
+      </div>
+    </section>
+
+    <section class="panel diagnosis" id="diagnosis-panel" hidden aria-label="Sorun detayı">
+      <h2>SORUN DETAYI</h2>
+      <p id="diagnosis-root" class="root-failure"></p>
+      <div class="summary current-grid">
+        <div><span>İş Birimi</span><strong id="diag-id">—</strong></div>
+        <div><span>Durum</span><strong id="diag-status">—</strong></div>
+        <div><span>Takıldığı aşama</span><strong id="diag-stage">—</strong></div>
+        <div><span>Son başarılı aşama</span><strong id="diag-last">—</strong></div>
+        <div><span>Deneme</span><strong id="diag-attempt">—</strong></div>
+        <div><span>Execution</span><strong id="diag-exec">—</strong></div>
+        <div><span>QA</span><strong id="diag-qa">—</strong></div>
+        <div><span>Denetçi</span><strong id="diag-inspector">—</strong></div>
+      </div>
+      <p><strong>Neden:</strong> <span id="diag-why">—</span></p>
+      <p><strong>Kök hata:</strong> <span id="diag-root-sig">—</span></p>
+      <p><strong>Etkilenen işler:</strong> <span id="diag-affected">—</span></p>
+    </section>
+
+    <section class="panel" aria-label="İş Birimi listesi">
+      <h2>İş Birimleri</h2>
+      <p class="open-ids">
+        <strong>İNCELEME GEREKİYOR:</strong> <span id="ids-review">—</span>
+        <strong>ERTELENDİ:</strong> <span id="ids-deferred">—</span>
+        <strong>BAŞARISIZ:</strong> <span id="ids-failed">—</span>
+        <strong>BLOKE:</strong> <span id="ids-blocked">—</span>
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Kimlik</th><th>Başlık</th><th>Durum</th><th>Deneme</th><th>Bağımlılıklar</th><th>Güncellendi</th></tr></thead>
+          <tbody id="unit-rows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="summary" aria-label="Sprint özeti">
+      <div><span>Sprint</span><strong id="sprint-id">Henüz sprint gözlenmedi</strong></div>
+      <div><span>Mevcut aşama</span><strong id="sprint-stage">—</strong></div>
+      <div><span>Güncellendi</span><strong id="updated-at">—</strong></div>
+      <div><span>Aşamalar</span><strong id="node-count">61</strong></div>
+    </section>
+    <p id="connection-state" class="connection">Yerel telemetri yükleniyor…</p>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Name</th><th>Current / last activity</th><th>Updated</th></tr></thead>
+        <thead><tr><th>Ad</th><th>Mevcut / son aktivite</th><th>Güncellendi</th></tr></thead>
         <tbody id="node-rows"></tbody>
       </table>
     </div>

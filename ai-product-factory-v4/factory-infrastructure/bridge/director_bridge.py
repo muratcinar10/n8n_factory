@@ -18,8 +18,9 @@ from urllib import request
 from urllib.error import HTTPError, URLError
 
 from project_orchestrator import (
-    ManifestError, STATE_DIR, load_state, pause_project, prepare_project, public_state,
-    recover_interrupted_projects, resume_project, start_project, validate_manifest,
+    ManifestError, STATE_DIR, load_state, maybe_continue_projects, pause_project, prepare_project, public_state,
+    recover_interrupted_projects, resume_project, start_validated_project, validate_manifest,
+    validation_view,
 )
 
 
@@ -37,7 +38,7 @@ REQUIRED_FIELDS = {
     "acceptance_criteria", "allowed_actions", "forbidden_actions", "requested_target",
 }
 OPTIONAL_FIELDS = {"context", "notes", "product_identity", "product_name", "product"}
-ALLOWED_TARGETS = {"SMOKE_FIXTURE"}
+ALLOWED_TARGETS = {"SMOKE_FIXTURE", "PRODUCTION"}
 ALLOWED_ACTIONS = {"READ_PROJECT", "CREATE_FILES", "MODIFY_FILES", "RUN_TESTS"}
 ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 
@@ -267,7 +268,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
         try:
             if self.path == "/api/projects/validate":
                 manifest = validate_manifest(self.read_json_body())
-                self.send_json(200, {"valid": True, "project_id": manifest["project_id"], "project_title": manifest["project_title"], "work_unit_count": len(manifest["work_units"])})
+                self.send_json(200, validation_view(manifest))
             elif self.path == "/api/projects/prepare":
                 manifest = validate_manifest(self.read_json_body())
                 self.send_json(201, public_state(prepare_project(manifest)))
@@ -275,10 +276,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 if os.environ.get("FACTORY_EXECUTION_ENABLED") != "true":
                     self.send_json(503, {"error": "factory_execution_disabled"})
                 else:
-                    payload = self.read_json_body()
-                    if not isinstance(payload, dict) or set(payload) != {"project_id"} or not isinstance(payload.get("project_id"), str):
-                        raise ManifestError("start requires exactly one prepared project_id")
-                    self.send_json(202, public_state(start_project(payload["project_id"])))
+                    self.send_json(202, public_state(start_validated_project(self.read_json_body())))
             elif match and match.group(2) == "pause":
                 self.send_json(200, public_state(pause_project(match.group(1))))
             elif match:
@@ -371,6 +369,7 @@ def main() -> None:
     AUDIT_DIR.mkdir(parents=True, exist_ok=True)
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     recover_interrupted_projects()
+    maybe_continue_projects()
     server = ThreadingHTTPServer((HOST, PORT), BridgeHandler)
     print(f"Director Bridge listening on http://{HOST}:{PORT}", flush=True)
     server.serve_forever()

@@ -4,6 +4,8 @@ set -eu
 BASE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 RUNTIME_DIR="$BASE_DIR/runtime"
 mkdir -p "$RUNTIME_DIR"
+FACTORY_MONITOR_PORT="${FACTORY_MONITOR_PORT:-9787}"
+export FACTORY_MONITOR_PORT
 TOKEN_FILE="$RUNTIME_DIR/.bridge-token"
 if [ -f "$TOKEN_FILE" ]; then
   BRIDGE_TOKEN=$(sed -n '1p' "$TOKEN_FILE")
@@ -29,7 +31,7 @@ start_service() {
   if [ "$name" = "director-bridge" ]; then
     FACTORY_EXECUTION_ENABLED=true FACTORY_BRIDGE_TOKEN="$BRIDGE_TOKEN" nohup /usr/bin/python3 "$script" >>"$log_file" 2>&1 </dev/null &
   else
-    FACTORY_BRIDGE_TOKEN="$BRIDGE_TOKEN" nohup /usr/bin/python3 "$script" >>"$log_file" 2>&1 </dev/null &
+    FACTORY_MONITOR_PORT="$FACTORY_MONITOR_PORT" FACTORY_BRIDGE_TOKEN="$BRIDGE_TOKEN" nohup /usr/bin/python3 "$script" >>"$log_file" 2>&1 </dev/null &
   fi
   pid=$!
   printf '%s\n' "$pid" > "$pid_file"
@@ -38,5 +40,5 @@ start_service() {
 
 start_service director-bridge "$BASE_DIR/bridge/director_bridge.py"
 start_service factory-monitor "$BASE_DIR/monitor/factory_monitor.py"
-echo "Director Control + Factory Monitor: http://127.0.0.1:8787"
+echo "Director Control + Factory Monitor: http://127.0.0.1:${FACTORY_MONITOR_PORT}"
 echo "Director Bridge backend:            http://127.0.0.1:8765"
