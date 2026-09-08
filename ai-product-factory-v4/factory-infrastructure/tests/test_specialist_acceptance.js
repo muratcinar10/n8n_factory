@@ -14,8 +14,9 @@ assert(names.indexOf("Codex Executor") < names.indexOf("MiniMax Developer"));
 assert(names.indexOf("MiniMax Developer") < names.indexOf("Laguna Developer"));
 
 const normalize = workflow.nodes.find((n) => n.name === "Normalize Specialist Result");
-assert(normalize.parameters.jsCode.includes("inheritedList"));
+assert(normalize.parameters.jsCode.includes("reattachStructural"));
 
+const directorCriterion = "No blocking runtime error occurs during normal gameplay.";
 const director = {
   product_identity: "Five Lives Hangman",
   objective: "Build a shell",
@@ -24,14 +25,14 @@ const director = {
   project_id: "PROJECT-HANGMAN-PILOT-001",
   work_unit_id: "W001",
   constraints: ["constraint A", "constraint B"],
-  acceptance_criteria: ["Page renders"],
+  acceptance_criteria: [directorCriterion],
   requirements: ["Render a page"],
   scope: ["W001"],
 };
 const analyst = {
   objective: "Build a shell",
   constraints: ["constraint A", "The constraint B"],
-  acceptance_criteria: ["Page renders"],
+  acceptance_criteria: ["No blocking runtime error is present during normal gameplay."],
   requirements: ["Render a page"],
   scope: ["W001"],
 };
@@ -45,7 +46,7 @@ function specialistContract(overrides = {}) {
     approved_scope: ["W001"],
     requirements: ["Render a page"],
     constraints: ["constraint A", "constraint B"],
-    acceptance_criteria: ["Page renders"],
+    acceptance_criteria: [directorCriterion],
     known_facts: ["Hangman uses five lives"],
     unknowns: ["Exact layout"],
     planner_handoff: ["Keep the shell local"],
@@ -79,46 +80,51 @@ async function runNormalize({ payload, prevName = "Specialist", extra = {} }) {
 }
 
 (async () => {
-  const canonical = ["constraint A", "constraint B"];
+  const a = await runNormalize({ payload: specialistContract() });
+  assert.equal(JSON.parse(a.content).acceptance_criteria[0], directorCriterion);
+  assert.equal(a.acceptance_criteria[0], directorCriterion);
 
-  const primary = await runNormalize({ payload: specialistContract(), prevName: "Specialist" });
-  assert.deepEqual(JSON.parse(primary.content).constraints, canonical);
-  assert.deepEqual(primary.constraints, canonical);
-
-  const fallback = await runNormalize({ payload: specialistContract(), prevName: "Specialist Fallback" });
-  assert.deepEqual(JSON.parse(fallback.content).constraints, canonical);
-  assert.equal(fallback.specialist_failover_used, true);
+  const b = await runNormalize({
+    payload: specialistContract({
+      acceptance_criteria: ["Gameplay must not hit a blocking runtime error."],
+    }),
+  });
+  assert.equal(JSON.parse(b.content).acceptance_criteria[0], directorCriterion);
 
   const omitted = { ...specialistContract() };
-  delete omitted.constraints;
-  const recovered = await runNormalize({ payload: omitted, prevName: "Specialist" });
-  assert.deepEqual(JSON.parse(recovered.content).constraints, canonical);
+  delete omitted.acceptance_criteria;
+  const c = await runNormalize({ payload: omitted });
+  assert.equal(JSON.parse(c.content).acceptance_criteria[0], directorCriterion);
+  assert(JSON.parse(c.content).acceptance_criteria.includes(directorCriterion));
 
-  const mutated = await runNormalize({
-    payload: specialistContract({ constraints: ["MUTATED", "unrelated"] }),
-    prevName: "Specialist Groq Fallback",
+  const d = await runNormalize({
+    payload: specialistContract({ acceptance_criteria: ["MUTATED CRITERION"] }),
+    prevName: "Specialist Fallback",
   });
-  assert.deepEqual(JSON.parse(mutated.content).constraints, canonical);
-  assert.equal(mutated.specialist_failover_used, true);
+  assert.equal(JSON.parse(d.content).acceptance_criteria[0], directorCriterion);
+  assert.equal(d.specialist_failover_used, true);
 
   await assert.rejects(
-    () => runNormalize({ payload: specialistContract({ constraints: { nested: true } }) }),
-    /constraints must be an array/
+    () => runNormalize({ payload: specialistContract({ acceptance_criteria: { bad: true } }) }),
+    /acceptance_criteria must be an array/
   );
   await assert.rejects(
-    () => runNormalize({ payload: specialistContract({ constraints: [1, 2] }) }),
+    () => runNormalize({ payload: specialistContract({ acceptance_criteria: [1] }) }),
     /array of strings/
   );
 
-  const ids = await runNormalize({
-    payload: specialistContract(),
-    extra: { project_id: "PROJECT-HANGMAN-PILOT-001", work_unit_id: "W001" },
+  const f = await runNormalize({
+    payload: specialistContract({
+      constraints: ["MUTATED"],
+      acceptance_criteria: ["paraphrased runtime safety"],
+    }),
   });
-  assert.equal(ids.project_id, "PROJECT-HANGMAN-PILOT-001");
-  assert.equal(ids.work_unit_id, "W001");
-  assert.deepEqual(ids.constraints, canonical);
+  assert.deepEqual(JSON.parse(f.content).constraints, ["constraint A", "constraint B"]);
+  assert.equal(JSON.parse(f.content).acceptance_criteria[0], directorCriterion);
+  assert.equal(f.project_id, "PROJECT-HANGMAN-PILOT-001");
+  assert.equal(f.work_unit_id, "W001");
 
-  console.log("Specialist inherited constraints fixtures: PASS");
+  console.log("Specialist inherited acceptance criteria fixtures: PASS");
 })().catch((error) => {
   console.error(error);
   process.exit(1);

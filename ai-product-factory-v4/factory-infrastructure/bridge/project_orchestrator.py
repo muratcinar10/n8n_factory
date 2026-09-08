@@ -88,6 +88,12 @@ def diagnosis_tr(summary: str, stage: str) -> str:
     if "known_context" in text_value or "normalize analyst" in text_value or stage == "Normalize Analyst Result":
         return "Kök sorun: known_context veri sözleşmesi beklenen biçimle uyuşmadı."
     if (
+        "acceptance criteria disappeared" in text_value
+        or "inherited acceptance" in text_value
+        or (stage == "Normalize Specialist Result" and "acceptance" in text_value)
+    ):
+        return "Kök sorun: Specialist çıktısında devralınan kabul kriterleri korunmadı."
+    if (
         "constraints disappeared" in text_value
         or "inherited constraints" in text_value
         or ("specialist" in text_value and "kısıt" in text_value)
@@ -1029,6 +1035,8 @@ def is_infrastructure_routing_review(unit: dict[str, object]) -> bool:
         or ("specialist" in blob and "normalize specialist" in blob)
         or "constraints disappeared" in blob
         or "inherited constraints" in blob
+        or "acceptance criteria disappeared" in blob
+        or "inherited acceptance" in blob
         or "specialist_contract" in blob
     )
 
