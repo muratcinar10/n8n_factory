@@ -139,13 +139,22 @@ def trusted_workspace(project_id: str) -> Path:
 
 
 def git(cwd: Path, *args: str, check: bool = False) -> subprocess.CompletedProcess[str]:
+    workspace = cwd.resolve()
+    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    env["GIT_DIR"] = str(workspace / ".git")
+    env["GIT_WORK_TREE"] = str(workspace)
+    if "HOME" in os.environ:
+        env["HOME"] = os.environ["HOME"]
+    if "PATH" in os.environ:
+        env["PATH"] = os.environ["PATH"]
     return subprocess.run(
         ["git", *args],
-        cwd=cwd,
+        cwd=workspace,
         check=check,
         capture_output=True,
         text=True,
         timeout=30,
+        env=env,
     )
 
 
@@ -326,6 +335,33 @@ def workspace_fingerprints(workspace: Path, files: list[str]) -> dict[str, str]:
     return fingerprints
 
 
+def bounded_workspace_relpaths(workspace: Path, *, maximum: int = 200) -> list[str]:
+    root = workspace.resolve()
+    rels: list[str] = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        try:
+            rel = path.relative_to(root)
+        except ValueError:
+            continue
+        if ".git" in rel.parts or ".." in rel.parts:
+            continue
+        rels.append(str(rel).replace("\\", "/"))
+        if len(rels) >= maximum:
+            break
+    return rels
+
+
+def workspace_content_fingerprints(workspace: Path) -> dict[str, str]:
+    return workspace_fingerprints(workspace, bounded_workspace_relpaths(workspace))
+
+
+def content_changed_files(before: dict[str, str], after: dict[str, str]) -> list[str]:
+    names = sorted(set(before) | set(after))
+    return [name for name in names if before.get(name) != after.get(name)]
+
+
 def write_applied_provenance(
     workspace: Path,
     project_id: str,
@@ -333,6 +369,7 @@ def write_applied_provenance(
     changed_files: list[str],
     *,
     prior_execution_id: str | None = None,
+    extra: dict[str, object] | None = None,
 ) -> None:
     ensure_receipts_dir()
     tracked = tracked_files(workspace)
@@ -346,6 +383,8 @@ def write_applied_provenance(
         "git_head": git_head(workspace),
         "file_fingerprints": workspace_fingerprints(workspace, tracked),
     }
+    if extra:
+        payload.update(extra)
     write_private_json(provenance_path(project_id, work_unit_id), payload)
 
 
@@ -703,11 +742,13 @@ def execute_task(payload: dict[str, object]) -> dict[str, object]:
     workspace = trusted_workspace(project_id)
     ensure_repo(workspace)
     prompt = build_prompt(payload)
+    before_hashes = workspace_content_fingerprints(workspace)
     with LOCK:
         exit_code, _stdout, summary, failure = invoke_cursor(workspace, prompt)
-    changed = porcelain_files(workspace)
-    diff = diff_text(workspace)
-    applied = bool(changed) and bool(diff) and failure not in {"CURSOR_UNAVAILABLE", "CURSOR_UNAUTHENTICATED", "CURSOR_TIMEOUT"}
+    after_hashes = workspace_content_fingerprints(workspace)
+    changed = content_changed_files(before_hashes, after_hashes)
+    diff = diff_text(workspace) if changed else ""
+    applied = bool(changed) and failure not in {"CURSOR_UNAVAILABLE", "CURSOR_UNAUTHENTICATED", "CURSOR_TIMEOUT"}
     tests = empty_test_evidence()
     runtime: list[str] = []
     recovery = empty_recovery()

@@ -403,6 +403,85 @@ class CursorBridgeContractTests(unittest.TestCase):
         self.assertFalse(recovery["eligible"])
         self.assertEqual("prior_provenance_missing", recovery["reason"])
 
+    def test_content_hashes_detect_uncommitted_tracked_mutation(self):
+        workspace = self._seed_committed_hangman()
+
+        def fake_invoke(ws, _prompt):
+            (ws / "app.js").write_text('"use strict";\nchanged\n', encoding="utf-8")
+            (ws / "styles.css").write_text("body{}\n", encoding="utf-8")
+            return 0, '{"result":"no git commit"}', "no git commit", None
+
+        with mock.patch.object(self.bridge, "invoke_cursor", side_effect=fake_invoke), mock.patch.object(
+            self.bridge,
+            "run_known_tests",
+            return_value=self.bridge.empty_test_evidence(),
+        ):
+            result = self.bridge.execute_task(self.bridge.validate_payload(self.payload))
+        self.assertTrue(result["implementation_applied"])
+        self.assertEqual(["app.js", "styles.css"], result["changed_files"])
+
+    def test_content_hashes_survive_transient_commit_and_head_restore(self):
+        workspace = self._seed_committed_hangman()
+        original_head = self.bridge.git_head(workspace)
+        restored = {}
+
+        def fake_invoke(ws, _prompt):
+            (ws / "app.js").write_text('"use strict";\ntransient\n', encoding="utf-8")
+            self.bridge.git(ws, "add", "-A")
+            self.bridge.git(
+                ws,
+                "-c",
+                "user.email=factory@local",
+                "-c",
+                "user.name=Factory",
+                "commit",
+                "-m",
+                "transient",
+            )
+            self.bridge.git(ws, "reset", "--mixed", "HEAD~1")
+            restored["head"] = self.bridge.git_head(ws)
+            return 0, '{"result":"reset"}', "reset", None
+
+        with mock.patch.object(self.bridge, "invoke_cursor", side_effect=fake_invoke), mock.patch.object(
+            self.bridge,
+            "run_known_tests",
+            return_value=self.bridge.empty_test_evidence(),
+        ):
+            result = self.bridge.execute_task(self.bridge.validate_payload(self.payload))
+        self.assertEqual(original_head, restored["head"])
+        self.assertTrue(result["implementation_applied"])
+        self.assertIn("app.js", result["changed_files"])
+        self.assertTrue(result["diff_present"])
+
+    def test_outside_workspace_write_is_not_w001_apply(self):
+        outside = Path(self.temp.name) / "evil.txt"
+
+        def fake_invoke(_ws, _prompt):
+            outside.write_text("not in hangman\n", encoding="utf-8")
+            return 0, '{"result":"wrote outside"}', "wrote outside", None
+
+        with mock.patch.object(self.bridge, "invoke_cursor", side_effect=fake_invoke):
+            result = self.bridge.execute_task(self.bridge.validate_payload(self.payload))
+        self.assertTrue(outside.is_file())
+        self.assertFalse(result["implementation_applied"])
+        self.assertEqual([], result["changed_files"])
+        self.assertEqual("CURSOR_NO_APPLIED_CHANGE", result["failure_class"])
+
+    def test_git_commands_ignore_inherited_git_dir(self):
+        workspace = self._seed_committed_hangman()
+        (workspace / "app.js").write_text('"use strict";\nmutated\n', encoding="utf-8")
+        outer = Path(self.temp.name) / "outer-repo"
+        outer.mkdir()
+        self.bridge.git(outer, "init")
+        with mock.patch.dict(
+            os.environ,
+            {"GIT_DIR": str((outer / ".git").resolve()), "GIT_WORK_TREE": str(outer.resolve())},
+        ):
+            self.assertIn("app.js", self.bridge.porcelain_files(workspace))
+            self.assertEqual(self.bridge.git_head(workspace), json.loads(
+                self.bridge.provenance_path("PROJECT-HANGMAN-PILOT-001", "W001").read_text(encoding="utf-8")
+            )["git_head"])
+
     def test_recovery_lineage_blocks_missing_provenance(self):
         workspace = self.bridge.trusted_workspace("PROJECT-HANGMAN-PILOT-001")
         self.bridge.ensure_repo(workspace)
