@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -52,6 +53,8 @@ class CursorBridgeContractTests(unittest.TestCase):
             ("env", {"CURSOR_API_KEY": "secret"}),
             ("workflow_id", "abc"),
             ("repository", "https://example.com/repo.git"),
+            ("executable", "/usr/bin/env"),
+            ("shell", "bash -c 'id'"),
         ):
             with self.assertRaises(self.bridge.BridgeError):
                 self.bridge.validate_payload({**self.payload, field: value})
@@ -88,6 +91,115 @@ class CursorBridgeContractTests(unittest.TestCase):
         self.assertEqual([], result["changed_files"])
         self.assertEqual("CURSOR_NO_APPLIED_CHANGE", result["failure_class"])
         self.assertFalse(result["tests_passed"])
+        self.assertEqual([], result["tests_executed"])
+        self.assertEqual([], result["test_commands"])
+
+    def test_trusted_runtime_resolves_npm_without_process_path(self):
+        fake = Path(self.temp.name) / "trusted-bin"
+        fake.mkdir()
+        npm = fake / "npm"
+        npm.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        npm.chmod(0o755)
+        node = fake / "node"
+        node.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        node.chmod(0o755)
+        self.bridge.TRUSTED_RUNTIME_DIR_CANDIDATES = (str(fake),)
+        with mock.patch.dict("os.environ", {"PATH": "/usr/bin:/bin"}, clear=False):
+            self.assertEqual(self.bridge.resolve_trusted_executable("npm"), npm.resolve())
+            self.assertEqual(self.bridge.resolve_trusted_executable("node"), node.resolve())
+            self.assertIsNone(self.bridge.resolve_trusted_executable("bash"))
+            self.assertIn(str(fake.resolve()), self.bridge.trusted_runtime_path().split(os.pathsep))
+        env = self.bridge.trusted_subprocess_env()
+        self.assertEqual(env["PATH"], str(fake.resolve()))
+        self.assertNotIn("npm", env)
+
+    def test_known_tests_use_allowlisted_npm_from_package_json(self):
+        fake = Path(self.temp.name) / "trusted-bin"
+        fake.mkdir()
+        recorder = Path(self.temp.name) / "npm-invocations.txt"
+        npm = fake / "npm"
+        npm.write_text(
+            "#!/bin/sh\nprintf '%s\\n' \"$PATH\" \"$@\" >> \"" + str(recorder) + "\"\nexit 0\n",
+            encoding="utf-8",
+        )
+        npm.chmod(0o755)
+        node = fake / "node"
+        node.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        node.chmod(0o755)
+        self.bridge.TRUSTED_RUNTIME_DIR_CANDIDATES = (str(fake), "/usr/bin", "/bin")
+        workspace = self.bridge.trusted_workspace("PROJECT-HANGMAN-PILOT-001")
+        (workspace / "package.json").write_text(
+            '{"name":"hangman-pilot","scripts":{"test":"node --check app.js && node test.mjs"}}\n',
+            encoding="utf-8",
+        )
+        (workspace / "app.js").write_text('"use strict";\n', encoding="utf-8")
+        evidence = self.bridge.run_known_tests(workspace)
+        self.assertEqual(["npm test"], evidence["tests_executed"])
+        self.assertEqual([0], evidence["test_exit_codes"])
+        self.assertTrue(evidence["tests_passed"])
+        self.assertTrue(any(str(npm.resolve()) in item for item in evidence["test_commands"]))
+        self.assertIn("test --silent", evidence["test_commands"][0])
+        recorded = recorder.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(["test", "--silent"], recorded[1:])
+        self.assertEqual(recorded[0], self.bridge.trusted_runtime_path())
+
+    def test_known_tests_fail_when_approved_npm_test_fails(self):
+        fake = Path(self.temp.name) / "trusted-bin"
+        fake.mkdir()
+        npm = fake / "npm"
+        npm.write_text("#!/bin/sh\necho boom >&2\nexit 7\n", encoding="utf-8")
+        npm.chmod(0o755)
+        node = fake / "node"
+        node.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        node.chmod(0o755)
+        self.bridge.TRUSTED_RUNTIME_DIR_CANDIDATES = (str(fake),)
+        workspace = self.bridge.trusted_workspace("PROJECT-HANGMAN-PILOT-001")
+        (workspace / "package.json").write_text(
+            '{"scripts":{"test":"node test.mjs"}}\n',
+            encoding="utf-8",
+        )
+        evidence = self.bridge.run_known_tests(workspace)
+        self.assertEqual(["npm test"], evidence["tests_executed"])
+        self.assertEqual([7], evidence["test_exit_codes"])
+        self.assertFalse(evidence["tests_passed"])
+        self.assertIn("boom", evidence["test_stderr_summary"])
+
+    def test_known_tests_do_not_run_without_approved_script(self):
+        workspace = self.bridge.trusted_workspace("PROJECT-HANGMAN-PILOT-001")
+        (workspace / "package.json").write_text('{"name":"hangman-pilot"}\n', encoding="utf-8")
+        evidence = self.bridge.run_known_tests(workspace)
+        self.assertEqual([], evidence["tests_executed"])
+        self.assertFalse(evidence["tests_passed"])
+
+    def test_execute_task_records_subprocess_test_evidence(self):
+        def fake_invoke(workspace, _prompt):
+            (workspace / "index.html").write_text("<!doctype html><html><body>Hangman</body></html>\n", encoding="utf-8")
+            (workspace / "package.json").write_text(
+                '{"scripts":{"test":"node --check app.js && node test.mjs"}}\n',
+                encoding="utf-8",
+            )
+            return 0, '{"result":"done"}', "done", None
+
+        with mock.patch.object(self.bridge, "invoke_cursor", side_effect=fake_invoke), mock.patch.object(
+            self.bridge,
+            "run_known_tests",
+            return_value={
+                "tests_executed": ["npm test"],
+                "test_commands": ["/usr/local/bin/npm test --silent"],
+                "test_exit_codes": [0],
+                "tests_passed": True,
+                "test_stdout_summary": "ok",
+                "test_stderr_summary": "",
+                "test_duration_ms": 12,
+            },
+        ):
+            result = self.bridge.execute_task(self.bridge.validate_payload(self.payload))
+        self.assertTrue(result["implementation_applied"])
+        self.assertEqual(["npm test"], result["tests_executed"])
+        self.assertEqual([0], result["test_exit_codes"])
+        self.assertTrue(result["tests_passed"])
+        self.assertEqual(12, result["test_duration_ms"])
+        self.assertIsNone(result["failure_class"])
 
 
 if __name__ == "__main__":

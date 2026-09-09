@@ -1318,6 +1318,11 @@ def is_infrastructure_routing_review(unit: dict[str, object]) -> bool:
         or "developer pool exhausted" in blob
         or "provider_not_found" in blob
         or "model_unavailable" in blob
+        or (
+            "could not verify mandatory evidence" in blob
+            and unit.get("inspector_score") is None
+            and unit.get("qa_lead_status") in {None, "NOT_VERIFIED"}
+        )
     )
 
 

@@ -621,7 +621,12 @@ class OrchestratorTests(unittest.TestCase):
         self.assertTrue(orchestrator.is_infrastructure_routing_review(deferred))
         qa_after_developer = dict(hangman_style)
         qa_after_developer["last_error"] = "Completion contract not met: status=COMPLETED_WITH_OPEN_ITEMS, qa=NOT_VERIFIED, deferred=Deterministic QA could not verify mandatory evidence."
-        self.assertFalse(orchestrator.is_infrastructure_routing_review(qa_after_developer))
+        self.assertTrue(orchestrator.is_infrastructure_routing_review(qa_after_developer))
+        scored_qa_fail = dict(qa_after_developer)
+        scored_qa_fail["qa_status"] = "FAIL"
+        scored_qa_fail["inspector_score"] = 42
+        scored_qa_fail["last_error"] = "Completion contract not met: status=COMPLETED_WITH_OPEN_ITEMS, qa=FAIL"
+        self.assertFalse(orchestrator.is_infrastructure_routing_review(scored_qa_fail))
         chain = orchestrator.developer_chain_tr(
             "provider_not_found MODEL_UNAVAILABLE",
             {

@@ -9,7 +9,6 @@ import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import re
-import shutil
 import subprocess
 import threading
 import time
@@ -26,6 +25,16 @@ WORKSPACES_ROOT = Path(
 ).resolve()
 ALLOWED_PROJECT_IDS = frozenset({"PROJECT-HANGMAN-PILOT-001"})
 PROJECT_ID_RE = re.compile(r"^PROJECT-[A-Z0-9][A-Z0-9._-]{0,80}$")
+# Inspect-and-keep: only include a candidate if that directory exists on this host.
+TRUSTED_RUNTIME_DIR_CANDIDATES = (
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
+    "/usr/bin",
+    "/bin",
+)
+TRUSTED_EXECUTABLE_NAMES = frozenset({"node", "npm", "python3"})
+APPROVED_NPM_TEST_ARGV = ("test", "--silent")
+APPROVED_PYTHON_TEST_ARGV = ("-m", "unittest", "discover", "-s", ".", "-q")
 ALLOWED_FIELDS = frozenset({
     "project_id",
     "work_unit_id",
@@ -184,31 +193,116 @@ def snapshot_commit(workspace: Path, work_unit_id: str) -> None:
     )
 
 
-def run_known_tests(workspace: Path) -> tuple[list[str], list[int], bool]:
-    executed: list[str] = []
-    codes: list[int] = []
-    if (workspace / "package.json").exists() and shutil.which("npm"):
-        executed.append("npm test")
-        result = subprocess.run(
-            ["npm", "test", "--silent"],
-            cwd=workspace,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        codes.append(int(result.returncode))
+def existing_trusted_runtime_dirs() -> list[str]:
+    dirs: list[str] = []
+    seen: set[str] = set()
+    for raw in TRUSTED_RUNTIME_DIR_CANDIDATES:
+        path = Path(raw)
+        if not path.is_dir():
+            continue
+        resolved = str(path.resolve())
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        dirs.append(resolved)
+    return dirs
+
+
+def trusted_runtime_path() -> str:
+    return os.pathsep.join(existing_trusted_runtime_dirs())
+
+
+def resolve_trusted_executable(name: str) -> Path | None:
+    if name not in TRUSTED_EXECUTABLE_NAMES:
+        return None
+    for directory in existing_trusted_runtime_dirs():
+        candidate = Path(directory) / name
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def trusted_subprocess_env(*, extra_dirs: tuple[str, ...] = ()) -> dict[str, str]:
+    env = {key: os.environ[key] for key in ("HOME", "USER", "LANG", "TERM") if key in os.environ}
+    dirs = existing_trusted_runtime_dirs()
+    for raw in extra_dirs:
+        path = Path(raw)
+        if path.is_dir():
+            resolved = str(path.resolve())
+            if resolved not in dirs:
+                dirs.append(resolved)
+    env["PATH"] = os.pathsep.join(dirs)
+    return env
+
+
+def package_has_approved_test_script(workspace: Path) -> bool:
+    package = workspace / "package.json"
+    if not package.is_file():
+        return False
+    try:
+        data = json.loads(package.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    scripts = data.get("scripts")
+    if not isinstance(scripts, dict):
+        return False
+    test = scripts.get("test")
+    return isinstance(test, str) and bool(test.strip())
+
+
+def _summarize_output(value: str | None, limit: int = 1_500) -> str:
+    return (value or "")[-limit:]
+
+
+def empty_test_evidence() -> dict[str, object]:
+    return {
+        "tests_executed": [],
+        "test_commands": [],
+        "test_exit_codes": [],
+        "tests_passed": False,
+        "test_stdout_summary": "",
+        "test_stderr_summary": "",
+        "test_duration_ms": 0,
+    }
+
+
+def run_known_tests(workspace: Path) -> dict[str, object]:
+    evidence = empty_test_evidence()
+    env = trusted_subprocess_env()
+    started = utc_ms()
+    command: list[str] | None = None
+    label = ""
+    if package_has_approved_test_script(workspace):
+        npm = resolve_trusted_executable("npm")
+        node = resolve_trusted_executable("node")
+        if npm is not None and node is not None:
+            command = [str(npm), *APPROVED_NPM_TEST_ARGV]
+            label = "npm test"
     elif (workspace / "tests").exists() or list(workspace.glob("test_*.py")):
-        executed.append("python3 -m unittest discover -s . -q")
-        result = subprocess.run(
-            ["python3", "-m", "unittest", "discover", "-s", ".", "-q"],
-            cwd=workspace,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        codes.append(int(result.returncode))
-    passed = bool(executed) and all(code == 0 for code in codes)
-    return executed, codes, passed
+        python3 = resolve_trusted_executable("python3")
+        if python3 is not None:
+            command = [str(python3), *APPROVED_PYTHON_TEST_ARGV]
+            label = "python3 -m unittest discover -s . -q"
+    if command is None:
+        return evidence
+    result = subprocess.run(
+        command,
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=env,
+    )
+    evidence["tests_executed"] = [label]
+    evidence["test_commands"] = [" ".join(command)]
+    evidence["test_exit_codes"] = [int(result.returncode)]
+    evidence["tests_passed"] = int(result.returncode) == 0
+    evidence["test_stdout_summary"] = _summarize_output(result.stdout)
+    evidence["test_stderr_summary"] = _summarize_output(result.stderr)
+    evidence["test_duration_ms"] = max(0, utc_ms() - started)
+    return evidence
 
 
 def runtime_checks(workspace: Path) -> list[str]:
@@ -318,13 +412,14 @@ def invoke_cursor(workspace: Path, prompt: str) -> tuple[int, str, str, str | No
         prompt,
     ]
     try:
+        agent_dir = str(agent.resolve().parent)
         result = subprocess.run(
             command,
             cwd=workspace,
             capture_output=True,
             text=True,
             timeout=CURSOR_TIMEOUT_SEC,
-            env={key: os.environ[key] for key in ("PATH", "HOME", "USER", "LANG", "TERM") if key in os.environ},
+            env=trusted_subprocess_env(extra_dirs=(agent_dir,)),
         )
     except subprocess.TimeoutExpired as exc:
         stdout = (exc.stdout or "") if isinstance(exc.stdout, str) else ""
@@ -353,13 +448,13 @@ def execute_task(payload: dict[str, object]) -> dict[str, object]:
     changed = porcelain_files(workspace)
     diff = diff_text(workspace)
     applied = bool(changed) and bool(diff) and failure not in {"CURSOR_UNAVAILABLE", "CURSOR_UNAUTHENTICATED", "CURSOR_TIMEOUT"}
-    tests_executed, test_exit_codes, tests_passed = ([], [], False)
+    tests = empty_test_evidence()
     runtime = []
     if applied:
-        tests_executed, test_exit_codes, tests_passed = run_known_tests(workspace)
+        tests = run_known_tests(workspace)
         runtime = runtime_checks(workspace)
         snapshot_commit(workspace, str(payload["work_unit_id"]))
-    if applied and tests_executed and not tests_passed:
+    if applied and tests["tests_executed"] and not tests["tests_passed"]:
         failure = "CURSOR_TEST_FAILURE"
     elif not applied and failure is None:
         failure = "CURSOR_NO_APPLIED_CHANGE"
@@ -371,9 +466,13 @@ def execute_task(payload: dict[str, object]) -> dict[str, object]:
         "implementation_applied": applied,
         "changed_files": changed,
         "diff_present": bool(diff),
-        "tests_executed": tests_executed,
-        "test_exit_codes": test_exit_codes,
-        "tests_passed": tests_passed,
+        "tests_executed": tests["tests_executed"],
+        "test_commands": tests["test_commands"],
+        "test_exit_codes": tests["test_exit_codes"],
+        "tests_passed": tests["tests_passed"],
+        "test_stdout_summary": tests["test_stdout_summary"],
+        "test_stderr_summary": tests["test_stderr_summary"],
+        "test_duration_ms": tests["test_duration_ms"],
         "runtime_checks": runtime,
         "cursor_exit_code": exit_code,
         "execution_duration_ms": utc_ms() - started,
@@ -437,9 +536,7 @@ class CursorBridgeHandler(BaseHTTPRequestHandler):
                 "implementation_applied": False,
                 "changed_files": [],
                 "diff_present": False,
-                "tests_executed": [],
-                "test_exit_codes": [],
-                "tests_passed": False,
+                **empty_test_evidence(),
                 "runtime_checks": [],
                 "cursor_exit_code": None,
                 "failure_class": exc.failure_class,
