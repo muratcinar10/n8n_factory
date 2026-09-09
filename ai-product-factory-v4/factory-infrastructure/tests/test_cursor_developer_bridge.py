@@ -332,6 +332,89 @@ class CursorBridgeContractTests(unittest.TestCase):
     def test_missing_intent_does_not_raise(self):
         self.assertIsNone(self.bridge.consume_recovery_intent("PROJECT-HANGMAN-PILOT-001", "W001"))
 
+    def _lineage(self, workspace, provenance):
+        return self.bridge.evaluate_recovery_lineage(
+            workspace,
+            "PROJECT-HANGMAN-PILOT-001",
+            "W001",
+            provenance,
+        )
+
+    def test_recovery_lineage_ignores_unrelated_outer_git_head(self):
+        workspace = self._seed_committed_hangman()
+        provenance = self.bridge.load_applied_provenance("PROJECT-HANGMAN-PILOT-001", "W001")
+        outer = Path(self.temp.name) / "factory-repo"
+        outer.mkdir()
+        self.bridge.git(outer, "init", check=True)
+        (outer / "infra.txt").write_text("unrelated factory commit\n", encoding="utf-8")
+        self.bridge.git(outer, "add", "-A")
+        self.bridge.git(
+            outer,
+            "-c",
+            "user.email=factory@local",
+            "-c",
+            "user.name=Factory",
+            "commit",
+            "-m",
+            "unrelated infrastructure",
+            check=True,
+        )
+        outer_head = self.bridge.git_head(outer)
+        hangman_head = self.bridge.git_head(workspace)
+        self.assertNotEqual(outer_head, hangman_head)
+        self.assertEqual(hangman_head, provenance["git_head"])
+        matched, reason = self._lineage(workspace, provenance)
+        self.assertTrue(matched)
+        self.assertIsNone(reason)
+
+    def test_recovery_lineage_blocks_altered_app_js(self):
+        workspace = self._seed_committed_hangman()
+        provenance = self.bridge.load_applied_provenance("PROJECT-HANGMAN-PILOT-001", "W001")
+        (workspace / "app.js").write_text('"use strict";\nmutated\n', encoding="utf-8")
+        matched, reason = self._lineage(workspace, provenance)
+        self.assertFalse(matched)
+        self.assertEqual("unrelated_workspace_mutation", reason)
+
+    def test_recovery_lineage_blocks_altered_package_json(self):
+        workspace = self._seed_committed_hangman()
+        provenance = self.bridge.load_applied_provenance("PROJECT-HANGMAN-PILOT-001", "W001")
+        (workspace / "package.json").write_text('{"name":"mutated"}\n', encoding="utf-8")
+        matched, reason = self._lineage(workspace, provenance)
+        self.assertFalse(matched)
+        self.assertEqual("unrelated_workspace_mutation", reason)
+
+    def test_recovery_lineage_blocks_different_project_provenance(self):
+        workspace = self._seed_committed_hangman()
+        self.bridge.write_recovery_intent("PROJECT-OTHER", "W001")
+        recovery = self.bridge.attempt_recovery_verification(workspace, "PROJECT-OTHER", "W001")
+        self.assertFalse(recovery["eligible"])
+        self.assertEqual("prior_provenance_missing", recovery["reason"])
+        self.assertIsNone(self.bridge.load_applied_provenance("PROJECT-OTHER", "W001"))
+
+    def test_recovery_lineage_blocks_different_work_unit_provenance(self):
+        self._seed_committed_hangman()
+        self.assertIsNone(self.bridge.load_applied_provenance("PROJECT-HANGMAN-PILOT-001", "W002"))
+        self.bridge.write_recovery_intent("PROJECT-HANGMAN-PILOT-001", "W002")
+        recovery = self.bridge.attempt_recovery_verification(
+            self.bridge.trusted_workspace("PROJECT-HANGMAN-PILOT-001"),
+            "PROJECT-HANGMAN-PILOT-001",
+            "W002",
+        )
+        self.assertFalse(recovery["eligible"])
+        self.assertEqual("prior_provenance_missing", recovery["reason"])
+
+    def test_recovery_lineage_blocks_missing_provenance(self):
+        workspace = self.bridge.trusted_workspace("PROJECT-HANGMAN-PILOT-001")
+        self.bridge.ensure_repo(workspace)
+        self.bridge.write_recovery_intent("PROJECT-HANGMAN-PILOT-001", "W001")
+        recovery = self.bridge.attempt_recovery_verification(
+            workspace,
+            "PROJECT-HANGMAN-PILOT-001",
+            "W001",
+        )
+        self.assertFalse(recovery["eligible"])
+        self.assertEqual("prior_provenance_missing", recovery["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()
