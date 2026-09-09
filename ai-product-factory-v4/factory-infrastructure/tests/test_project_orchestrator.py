@@ -622,6 +622,9 @@ class OrchestratorTests(unittest.TestCase):
         qa_after_developer = dict(hangman_style)
         qa_after_developer["last_error"] = "Completion contract not met: status=COMPLETED_WITH_OPEN_ITEMS, qa=NOT_VERIFIED, deferred=Deterministic QA could not verify mandatory evidence."
         self.assertTrue(orchestrator.is_infrastructure_routing_review(qa_after_developer))
+        no_apply = dict(hangman_style)
+        no_apply["last_error"] = "Completion contract not met: status=COMPLETED_WITH_OPEN_ITEMS, qa=NOT_VERIFIED, deferred=CURSOR_NO_APPLIED_CHANGE"
+        self.assertTrue(orchestrator.is_infrastructure_routing_review(no_apply))
         scored_qa_fail = dict(qa_after_developer)
         scored_qa_fail["qa_status"] = "FAIL"
         scored_qa_fail["inspector_score"] = 42
@@ -692,6 +695,9 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(3, recovered["historical_attempt_ledger"][0]["attempts"])
         self.assertEqual(["100", "101"], recovered["historical_attempt_ledger"][0]["historical_execution_ids"])
         self.assertEqual(["100", "101"], recovered["historical_execution_ids"])
+        intent = orchestrator.STATE_DIR / "cursor_receipts" / "PROJECT-TEST__W001.recovery-intent.json"
+        self.assertTrue(intent.is_file())
+        self.assertEqual("PRIOR_APPLY_VERIFICATION", json.loads(intent.read_text(encoding="utf-8"))["mode"])
 
     def test_meaningful_open_items_are_not_auto_reset(self):
         unit = {

@@ -14,6 +14,7 @@ assert.equal(executor.parameters.workflowId.value, "y5gVRIcXPvXoTQic");
 
 const dispatcher = workflow.nodes.find((n) => n.name === "Developer Dispatcher");
 const qaGate = workflow.nodes.find((n) => n.name === "Deterministic QA Gate");
+const normalizeCursor = workflow.nodes.find((n) => n.name === "Normalize Cursor Developer Result");
 const safety = b04.nodes.find((n) => n.name === "Codex Task Safety Gate");
 const buildJob = b04.nodes.find((n) => n.name === "Build Host Writer Job");
 assert(buildJob.parameters.jsCode.includes("PRODUCTION:'/data/host-writer'"));
@@ -192,6 +193,42 @@ const hangmanBody = {
   assert.deepEqual(qaCursor.qa_result.changed_files, ["index.html"]);
   assert(!qaCursor.qa_result.missing_evidence.includes("NON_CODEX_PROPOSAL_NOT_APPLIED"));
   console.log("D Cursor applied evidence reaches QA: PASS");
+
+  const recoveredCursor = await run(
+    normalizeCursor,
+    {
+      implementation_applied: false,
+      changed_files: [],
+      cursor_exit_code: 0,
+      tests_executed: ["npm test"],
+      test_exit_codes: [0],
+      tests_passed: true,
+      runtime_checks: ["index.html contains an HTML document"],
+      developer_summary: "no new diff",
+      failure_class: null,
+      recovery_verification: {
+        eligible: true,
+        mode: "PRIOR_APPLY_VERIFICATION",
+        prior_execution_id: "113",
+        prior_implementation_applied: true,
+        prior_changed_files: ["app.js", "index.html", "package.json"],
+        workspace_fingerprint_matched: true,
+      },
+    },
+    "Cursor Developer",
+    { "Developer Dispatcher": approvedCursor }
+  );
+  assert.equal(recoveredCursor.implementation_applied, false);
+  assert.equal(recoveredCursor.recovery_verification.prior_execution_id, "113");
+  assert.deepEqual(recoveredCursor.changed_files, ["app.js", "index.html", "package.json"]);
+  assert.equal(recoveredCursor.execution_status, "SUCCESS");
+  const qaRecovered = await run(qaGate, recoveredCursor, "Normalize Cursor Developer Result", {
+    "Developer Dispatcher": approvedCursor,
+    "Normalize Non-Codex Developer Result": {},
+  });
+  assert(qaRecovered.qa_result.missing_evidence.includes("CURSOR_NO_APPLIED_CHANGE"));
+  assert.notEqual(qaRecovered.qa_result.verdict, "PASS");
+  console.log("D Cursor recovery verification does not auto-pass QA: PASS");
 
   const appliedIncoming = {
     ...approved,

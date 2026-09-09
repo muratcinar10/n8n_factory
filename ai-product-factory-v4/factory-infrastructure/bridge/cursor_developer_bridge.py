@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import os
@@ -68,7 +69,17 @@ REJECTED_FIELDS = frozenset({
     "repository",
     "repo",
     "git_url",
+    "recovery_mode",
+    "recovery_verification",
+    "prior_execution_id",
+    "provenance",
+    "fingerprint",
+    "receipts",
 })
+RECOVERY_MODE = "PRIOR_APPLY_VERIFICATION"
+TRUSTED_RUNTIME_ROOT = Path.home() / "Library/Application Support/ai-product-factory-v4"
+DEFAULT_RECEIPTS_DIR = TRUSTED_RUNTIME_ROOT / "cursor_receipts"
+RECEIPTS_DIR = DEFAULT_RECEIPTS_DIR
 MAX_BODY_BYTES = 64 * 1024
 CURSOR_TIMEOUT_SEC = int(os.environ.get("FACTORY_CURSOR_TIMEOUT_SEC", "480"))
 LOCK = threading.Lock()
@@ -191,6 +202,253 @@ def snapshot_commit(workspace: Path, work_unit_id: str) -> None:
         "-m",
         f"factory snapshot {work_unit_id}",
     )
+
+
+def empty_recovery(reason: str | None = None) -> dict[str, object]:
+    return {
+        "eligible": False,
+        "mode": None,
+        "prior_execution_id": None,
+        "prior_implementation_applied": False,
+        "prior_changed_files": [],
+        "workspace_fingerprint_matched": False,
+        "reason": reason,
+    }
+
+
+def _downloads_root() -> Path:
+    return (Path.home() / "Downloads").resolve()
+
+
+def path_is_under_downloads(path: Path) -> bool:
+    try:
+        path.expanduser().resolve().relative_to(_downloads_root())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def receipts_dir() -> Path:
+    candidate = RECEIPTS_DIR
+    if path_is_under_downloads(candidate):
+        return DEFAULT_RECEIPTS_DIR
+    return candidate
+
+
+def ensure_receipts_dir() -> Path:
+    directory = receipts_dir()
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        os.chmod(directory, 0o700)
+    except OSError:
+        pass
+    return directory
+
+
+def unlink_quietly(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+    except OSError:
+        return
+
+
+def write_private_json(path: Path, payload: dict[str, object]) -> None:
+    directory = ensure_receipts_dir()
+    target = directory / path.name
+    tmp = target.with_name(target.name + ".tmp")
+    body = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    try:
+        tmp.write_text(body, encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, target)
+        os.chmod(target, 0o600)
+    except OSError:
+        unlink_quietly(tmp)
+        raise
+
+
+def _receipt_stem(project_id: str, work_unit_id: str) -> str:
+    return f"{project_id}__{work_unit_id}"
+
+
+def provenance_path(project_id: str, work_unit_id: str) -> Path:
+    return receipts_dir() / f"{_receipt_stem(project_id, work_unit_id)}.provenance.json"
+
+
+def intent_path(project_id: str, work_unit_id: str) -> Path:
+    return receipts_dir() / f"{_receipt_stem(project_id, work_unit_id)}.recovery-intent.json"
+
+
+def git_head(workspace: Path) -> str:
+    result = git(workspace, "rev-parse", "HEAD")
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def tracked_files(workspace: Path) -> list[str]:
+    result = git(workspace, "ls-files")
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def untracked_files(workspace: Path) -> list[str]:
+    result = git(workspace, "ls-files", "--others", "--exclude-standard")
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def _safe_workspace_file(workspace: Path, rel: str) -> Path | None:
+    if not rel or rel.startswith("/") or ".." in Path(rel).parts:
+        return None
+    root = workspace.resolve()
+    path = (workspace / rel).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return None
+    return path if path.is_file() else None
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def workspace_fingerprints(workspace: Path, files: list[str]) -> dict[str, str]:
+    fingerprints: dict[str, str] = {}
+    for rel in files:
+        path = _safe_workspace_file(workspace, rel)
+        if path is None:
+            continue
+        fingerprints[rel] = file_sha256(path)
+    return fingerprints
+
+
+def write_applied_provenance(
+    workspace: Path,
+    project_id: str,
+    work_unit_id: str,
+    changed_files: list[str],
+    *,
+    prior_execution_id: str | None = None,
+) -> None:
+    ensure_receipts_dir()
+    tracked = tracked_files(workspace)
+    payload = {
+        "project_id": project_id,
+        "work_unit_id": work_unit_id,
+        "implementation_applied": True,
+        "prior_execution_id": prior_execution_id,
+        "changed_files": list(changed_files),
+        "tracked_files": tracked,
+        "git_head": git_head(workspace),
+        "file_fingerprints": workspace_fingerprints(workspace, tracked),
+    }
+    write_private_json(provenance_path(project_id, work_unit_id), payload)
+
+
+def load_applied_provenance(project_id: str, work_unit_id: str) -> dict[str, object] | None:
+    path = provenance_path(project_id, work_unit_id)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if data.get("project_id") != project_id or data.get("work_unit_id") != work_unit_id:
+        return None
+    return data
+
+
+def write_recovery_intent(project_id: str, work_unit_id: str) -> None:
+    write_private_json(
+        intent_path(project_id, work_unit_id),
+        {
+            "mode": RECOVERY_MODE,
+            "project_id": project_id,
+            "work_unit_id": work_unit_id,
+            "created_at_ms": utc_ms(),
+        },
+    )
+
+
+def consume_recovery_intent(project_id: str, work_unit_id: str) -> dict[str, object] | None:
+    path = intent_path(project_id, work_unit_id)
+    try:
+        if not path.is_file():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        unlink_quietly(path)
+        return None
+    unlink_quietly(path)
+    if not isinstance(data, dict):
+        return None
+    if data.get("mode") != RECOVERY_MODE:
+        return None
+    if data.get("project_id") != project_id or data.get("work_unit_id") != work_unit_id:
+        return None
+    return data
+
+
+def evaluate_recovery_lineage(
+    workspace: Path,
+    project_id: str,
+    work_unit_id: str,
+    provenance: dict[str, object],
+) -> tuple[bool, str | None]:
+    prior_id = str(provenance.get("prior_execution_id") or "").strip()
+    changed = provenance.get("changed_files")
+    tracked = provenance.get("tracked_files")
+    fingerprints = provenance.get("file_fingerprints")
+    expected_head = str(provenance.get("git_head") or "").strip()
+    if provenance.get("implementation_applied") is not True:
+        return False, "prior_apply_not_recorded"
+    if not prior_id:
+        return False, "prior_execution_id_missing"
+    if not isinstance(changed, list) or not changed or any(not isinstance(item, str) or not item for item in changed):
+        return False, "prior_changed_files_missing"
+    if not isinstance(tracked, list) or not tracked or any(not isinstance(item, str) or not item for item in tracked):
+        return False, "prior_tracked_files_missing"
+    if not isinstance(fingerprints, dict) or not fingerprints:
+        return False, "prior_fingerprints_missing"
+    if porcelain_files(workspace) or untracked_files(workspace):
+        return False, "unrelated_workspace_mutation"
+    if expected_head and git_head(workspace) != expected_head:
+        return False, "git_head_mismatch"
+    current_tracked = tracked_files(workspace)
+    if set(current_tracked) != set(tracked):
+        return False, "tracked_files_mismatch"
+    current = workspace_fingerprints(workspace, list(tracked))
+    expected = {str(key): str(value) for key, value in fingerprints.items()}
+    if current != expected:
+        return False, "fingerprint_mismatch"
+    return True, None
+
+
+def attempt_recovery_verification(workspace: Path, project_id: str, work_unit_id: str) -> dict[str, object]:
+    intent = consume_recovery_intent(project_id, work_unit_id)
+    if intent is None:
+        return empty_recovery("recovery_mode_not_explicit")
+    provenance = load_applied_provenance(project_id, work_unit_id)
+    if provenance is None:
+        return empty_recovery("prior_provenance_missing")
+    matched, reason = evaluate_recovery_lineage(workspace, project_id, work_unit_id, provenance)
+    prior_files = [item for item in provenance.get("changed_files") or [] if isinstance(item, str)]
+    recovery = {
+        "eligible": matched,
+        "mode": RECOVERY_MODE if matched else None,
+        "prior_execution_id": str(provenance.get("prior_execution_id") or "") or None,
+        "prior_implementation_applied": provenance.get("implementation_applied") is True,
+        "prior_changed_files": prior_files,
+        "workspace_fingerprint_matched": matched,
+        "reason": None if matched else reason,
+    }
+    return recovery
 
 
 def existing_trusted_runtime_dirs() -> list[str]:
@@ -440,7 +698,9 @@ def invoke_cursor(workspace: Path, prompt: str) -> tuple[int, str, str, str | No
 
 def execute_task(payload: dict[str, object]) -> dict[str, object]:
     started = utc_ms()
-    workspace = trusted_workspace(str(payload["project_id"]))
+    project_id = str(payload["project_id"])
+    work_unit_id = str(payload["work_unit_id"])
+    workspace = trusted_workspace(project_id)
     ensure_repo(workspace)
     prompt = build_prompt(payload)
     with LOCK:
@@ -449,15 +709,38 @@ def execute_task(payload: dict[str, object]) -> dict[str, object]:
     diff = diff_text(workspace)
     applied = bool(changed) and bool(diff) and failure not in {"CURSOR_UNAVAILABLE", "CURSOR_UNAUTHENTICATED", "CURSOR_TIMEOUT"}
     tests = empty_test_evidence()
-    runtime = []
+    runtime: list[str] = []
+    recovery = empty_recovery()
     if applied:
+        consume_recovery_intent(project_id, work_unit_id)
         tests = run_known_tests(workspace)
         runtime = runtime_checks(workspace)
-        snapshot_commit(workspace, str(payload["work_unit_id"]))
-    if applied and tests["tests_executed"] and not tests["tests_passed"]:
-        failure = "CURSOR_TEST_FAILURE"
-    elif not applied and failure is None:
-        failure = "CURSOR_NO_APPLIED_CHANGE"
+        snapshot_commit(workspace, work_unit_id)
+        write_applied_provenance(workspace, project_id, work_unit_id, changed)
+        if tests["tests_executed"] and not tests["tests_passed"]:
+            failure = "CURSOR_TEST_FAILURE"
+    elif exit_code == 0 and failure is None:
+        try:
+            recovery = attempt_recovery_verification(workspace, project_id, work_unit_id)
+        except OSError:
+            recovery = empty_recovery("recovery_control_unavailable")
+        if recovery["eligible"]:
+            tests = run_known_tests(workspace)
+            runtime = runtime_checks(workspace)
+            if tests["tests_executed"] and not tests["tests_passed"]:
+                failure = "CURSOR_TEST_FAILURE"
+            elif not tests["tests_executed"]:
+                failure = "CURSOR_NO_APPLIED_CHANGE"
+        else:
+            failure = "CURSOR_NO_APPLIED_CHANGE"
+    recovery_verified = (
+        recovery.get("eligible") is True
+        and bool(tests["tests_executed"])
+        and tests["tests_passed"] is True
+        and exit_code == 0
+        and failure is None
+    )
+    completed = bool(applied or recovery_verified)
     return {
         "developer": "CURSOR",
         "developer_class": "APPLIED_DEVELOPER",
@@ -478,9 +761,10 @@ def execute_task(payload: dict[str, object]) -> dict[str, object]:
         "execution_duration_ms": utc_ms() - started,
         "developer_summary": summary[:2000],
         "failure_class": failure,
-        "status": "COMPLETED" if applied else "FAILED",
-        "task_completed": applied,
-        "ok": applied and exit_code == 0 and failure is None,
+        "recovery_verification": recovery,
+        "status": "COMPLETED" if completed else "FAILED",
+        "task_completed": completed,
+        "ok": completed and exit_code == 0 and failure is None,
     }
 
 
@@ -541,12 +825,30 @@ class CursorBridgeHandler(BaseHTTPRequestHandler):
                 "cursor_exit_code": None,
                 "failure_class": exc.failure_class,
                 "developer_summary": str(exc)[:300],
+                "recovery_verification": empty_recovery(),
                 "ok": False,
                 "task_completed": False,
                 "status": "FAILED",
             })
         except (UnicodeDecodeError, json.JSONDecodeError):
             self.send_json(400, {"error": "invalid_json", "failure_class": "CURSOR_MALFORMED_RESULT"})
+        except Exception as exc:
+            self.send_json(500, {
+                "developer": "CURSOR",
+                "developer_class": "APPLIED_DEVELOPER",
+                "implementation_applied": False,
+                "changed_files": [],
+                "diff_present": False,
+                **empty_test_evidence(),
+                "runtime_checks": [],
+                "cursor_exit_code": None,
+                "failure_class": "CURSOR_EXECUTION_ERROR",
+                "developer_summary": str(exc)[:300],
+                "recovery_verification": empty_recovery(),
+                "ok": False,
+                "task_completed": False,
+                "status": "FAILED",
+            })
 
 
 def main() -> None:

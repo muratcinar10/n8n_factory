@@ -29,6 +29,8 @@ class CursorBridgeContractTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.bridge.WORKSPACES_ROOT = Path(self.temp.name) / "workspaces"
         self.bridge.WORKSPACES_ROOT.mkdir(parents=True)
+        self.bridge.RECEIPTS_DIR = Path(self.temp.name) / "receipts"
+        self.bridge.RECEIPTS_DIR.mkdir(parents=True)
         self.payload = {
             "project_id": "PROJECT-HANGMAN-PILOT-001",
             "work_unit_id": "W001",
@@ -55,6 +57,10 @@ class CursorBridgeContractTests(unittest.TestCase):
             ("repository", "https://example.com/repo.git"),
             ("executable", "/usr/bin/env"),
             ("shell", "bash -c 'id'"),
+            ("recovery_mode", "PRIOR_APPLY_VERIFICATION"),
+            ("prior_execution_id", "113"),
+            ("provenance", {"git_head": "abc"}),
+            ("fingerprint", {"app.js": "deadbeef"}),
         ):
             with self.assertRaises(self.bridge.BridgeError):
                 self.bridge.validate_payload({**self.payload, field: value})
@@ -200,6 +206,131 @@ class CursorBridgeContractTests(unittest.TestCase):
         self.assertTrue(result["tests_passed"])
         self.assertEqual(12, result["test_duration_ms"])
         self.assertIsNone(result["failure_class"])
+        self.assertFalse(result["recovery_verification"]["eligible"])
+
+    def _seed_committed_hangman(self) -> Path:
+        workspace = self.bridge.trusted_workspace("PROJECT-HANGMAN-PILOT-001")
+        self.bridge.ensure_repo(workspace)
+        (workspace / "index.html").write_text("<!doctype html><html><body>Hangman</body></html>\n", encoding="utf-8")
+        (workspace / "app.js").write_text('"use strict";\n', encoding="utf-8")
+        (workspace / "package.json").write_text(
+            '{"name":"hangman-pilot","scripts":{"test":"node --check app.js"}}\n',
+            encoding="utf-8",
+        )
+        self.bridge.git(workspace, "add", "-A")
+        self.bridge.git(
+            workspace,
+            "-c",
+            "user.email=factory@local",
+            "-c",
+            "user.name=Factory",
+            "commit",
+            "-m",
+            "factory snapshot W001",
+        )
+        self.bridge.write_applied_provenance(
+            workspace,
+            "PROJECT-HANGMAN-PILOT-001",
+            "W001",
+            ["app.js", "index.html", "package.json"],
+            prior_execution_id="113",
+        )
+        return workspace
+
+    def test_recovery_http_fields_cannot_force_tests(self):
+        def fake_invoke(_workspace, _prompt):
+            return 0, '{"result":"already applied"}', "already applied", None
+
+        with mock.patch.object(self.bridge, "invoke_cursor", side_effect=fake_invoke):
+            result = self.bridge.execute_task(self.bridge.validate_payload(self.payload))
+        self.assertFalse(result["implementation_applied"])
+        self.assertEqual([], result["tests_executed"])
+        self.assertEqual("CURSOR_NO_APPLIED_CHANGE", result["failure_class"])
+        self.assertEqual("recovery_mode_not_explicit", result["recovery_verification"]["reason"])
+
+    def test_recovery_rejects_fingerprint_mismatch(self):
+        workspace = self._seed_committed_hangman()
+        self.bridge.write_recovery_intent("PROJECT-HANGMAN-PILOT-001", "W001")
+        (workspace / "app.js").write_text('"use strict";\nmutated\n', encoding="utf-8")
+        self.bridge.git(workspace, "add", "-A")
+        self.bridge.git(
+            workspace,
+            "-c",
+            "user.email=factory@local",
+            "-c",
+            "user.name=Factory",
+            "commit",
+            "-m",
+            "unrelated mutation",
+        )
+
+        def fake_invoke(_workspace, _prompt):
+            return 0, '{"result":"no changes"}', "no changes", None
+
+        with mock.patch.object(self.bridge, "invoke_cursor", side_effect=fake_invoke):
+            result = self.bridge.execute_task(self.bridge.validate_payload(self.payload))
+        self.assertFalse(result["implementation_applied"])
+        self.assertEqual([], result["tests_executed"])
+        self.assertFalse(result["recovery_verification"]["eligible"])
+        self.assertIn(result["recovery_verification"]["reason"], {"fingerprint_mismatch", "git_head_mismatch"})
+        self.assertEqual("CURSOR_NO_APPLIED_CHANGE", result["failure_class"])
+
+    def test_recovery_runs_allowlisted_tests_without_new_apply(self):
+        self._seed_committed_hangman()
+        self.bridge.write_recovery_intent("PROJECT-HANGMAN-PILOT-001", "W001")
+
+        def fake_invoke(_workspace, _prompt):
+            return 0, '{"result":"workspace already has W001"}', "workspace already has W001", None
+
+        with mock.patch.object(self.bridge, "invoke_cursor", side_effect=fake_invoke), mock.patch.object(
+            self.bridge,
+            "run_known_tests",
+            return_value={
+                "tests_executed": ["npm test"],
+                "test_commands": ["/usr/local/bin/npm test --silent"],
+                "test_exit_codes": [0],
+                "tests_passed": True,
+                "test_stdout_summary": "ok",
+                "test_stderr_summary": "",
+                "test_duration_ms": 9,
+            },
+        ) as run_tests:
+            result = self.bridge.execute_task(self.bridge.validate_payload(self.payload))
+        run_tests.assert_called_once()
+        self.assertFalse(result["implementation_applied"])
+        self.assertEqual([], result["changed_files"])
+        self.assertFalse(result["diff_present"])
+        self.assertTrue(result["recovery_verification"]["eligible"])
+        self.assertEqual("113", result["recovery_verification"]["prior_execution_id"])
+        self.assertEqual("PRIOR_APPLY_VERIFICATION", result["recovery_verification"]["mode"])
+        self.assertEqual(["npm test"], result["tests_executed"])
+        self.assertEqual([0], result["test_exit_codes"])
+        self.assertTrue(result["tests_passed"])
+        self.assertIsNone(result["failure_class"])
+        self.assertTrue(result["ok"])
+        self.assertEqual("COMPLETED", result["status"])
+        self.assertFalse(self.bridge.intent_path("PROJECT-HANGMAN-PILOT-001", "W001").exists())
+
+    def test_consume_intent_survives_unlink_permission_error(self):
+        self.bridge.write_recovery_intent("PROJECT-HANGMAN-PILOT-001", "W001")
+        path = self.bridge.intent_path("PROJECT-HANGMAN-PILOT-001", "W001")
+        self.assertTrue(path.is_file())
+        with mock.patch.object(self.bridge.Path, "unlink", side_effect=PermissionError("Operation not permitted")):
+            consumed = self.bridge.consume_recovery_intent("PROJECT-HANGMAN-PILOT-001", "W001")
+        self.assertEqual("PRIOR_APPLY_VERIFICATION", consumed["mode"])
+        self.assertEqual("W001", consumed["work_unit_id"])
+
+    def test_receipts_never_use_downloads(self):
+        downloads = Path.home() / "Downloads" / "n8n-self-hosted-ai" / "forbidden-receipts"
+        self.bridge.RECEIPTS_DIR = downloads
+        relocated = self.bridge.receipts_dir()
+        self.assertFalse(self.bridge.path_is_under_downloads(relocated))
+        self.assertEqual(self.bridge.DEFAULT_RECEIPTS_DIR, relocated)
+        self.bridge.RECEIPTS_DIR = Path(self.temp.name) / "receipts"
+        self.assertEqual(self.bridge.RECEIPTS_DIR, self.bridge.receipts_dir())
+
+    def test_missing_intent_does_not_raise(self):
+        self.assertIsNone(self.bridge.consume_recovery_intent("PROJECT-HANGMAN-PILOT-001", "W001"))
 
 
 if __name__ == "__main__":

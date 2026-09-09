@@ -23,6 +23,10 @@ def main() -> None:
     os.environ.setdefault("FACTORY_CURSOR_BRIDGE_HOST", "0.0.0.0")
     os.environ.setdefault("FACTORY_CURSOR_BRIDGE_PORT", "8766")
     os.environ.setdefault("FACTORY_CURSOR_WORKSPACES", str(WORKSPACES))
+    os.environ.setdefault(
+        "FACTORY_CURSOR_RECEIPTS",
+        str(SUPPORT / "cursor_receipts"),
+    )
     os.environ.setdefault("HOME", str(Path.home()))
     runpy.run_path(str(SUPPORT / "cursor_developer_bridge.py"), run_name="__main__")
 

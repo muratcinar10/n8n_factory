@@ -55,10 +55,6 @@ ensure_cursor_bridge_agent() {
   cp "$BASE_DIR/bridge/cursor_developer_bridge.py" "$support/cursor_developer_bridge.py"
   cp "$BASE_DIR/launchd/ai.product.factory.cursor-bridge.plist" "$HOME/Library/LaunchAgents/${label}.plist"
   if launchctl print "$domain/$label" >/dev/null 2>&1; then
-    if lsof -nP -iTCP:8766 -sTCP:LISTEN >/dev/null 2>&1; then
-      echo "cursor-developer-bridge LaunchAgent already running"
-      return
-    fi
     launchctl kickstart -k "$domain/$label"
     echo "cursor-developer-bridge LaunchAgent restarted"
     return

@@ -1332,11 +1332,50 @@ def is_infrastructure_routing_review(unit: dict[str, object]) -> bool:
             and unit.get("qa_lead_status") in {None, "NOT_VERIFIED"}
         )
         or cursor_unreachable
+        or "cursor_no_applied_change" in blob
     )
+
+
+def write_recovery_intent(project_id: str, work_unit_id: str) -> None:
+    production_state = Path(__file__).resolve().parent / "state"
+    trusted = Path.home() / "Library/Application Support/ai-product-factory-v4/cursor_receipts"
+    downloads = (Path.home() / "Downloads").resolve()
+    if STATE_DIR.resolve() == production_state.resolve():
+        receipts = trusted
+    else:
+        receipts = STATE_DIR / "cursor_receipts"
+        try:
+            receipts.resolve().relative_to(downloads)
+            receipts = trusted
+        except ValueError:
+            pass
+    receipts.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        os.chmod(receipts, 0o700)
+    except OSError:
+        pass
+    path = receipts / f"{project_id}__{work_unit_id}.recovery-intent.json"
+    path.write_text(
+        json.dumps(
+            {
+                "mode": "PRIOR_APPLY_VERIFICATION",
+                "project_id": project_id,
+                "work_unit_id": work_unit_id,
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
 
 
 def reset_unproven_transport_reviews(state: dict[str, object]) -> bool:
     changed = False
+    recovered_units: list[str] = []
     plan = load_plan(str(state["project_id"])) or {"work_units": []}
     dependencies = {unit["id"]: unit["dependencies"] for unit in plan["work_units"]}
     for unit in state.get("work_units", []):
@@ -1367,8 +1406,11 @@ def reset_unproven_transport_reviews(state: dict[str, object]) -> bool:
         unit["factory_execution_id"] = None
         unit["meaningful_factory_attempt"] = False
         unit["updated_at"] = now()
+        recovered_units.append(str(unit["id"]))
         changed = True
     if changed:
+        for work_unit_id in recovered_units:
+            write_recovery_intent(str(state["project_id"]), work_unit_id)
         for unit in state["work_units"]:
             if unit["status"] == "BLOCKED":
                 unit["status"] = "PENDING" if dependencies.get(unit["id"]) else "READY"
