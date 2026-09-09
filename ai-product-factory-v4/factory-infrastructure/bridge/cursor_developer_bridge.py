@@ -819,17 +819,16 @@ def attempt_skip_already_applied(
     work_unit_id: str,
 ) -> dict[str, object] | None:
     intent = peek_recovery_intent(project_id, work_unit_id)
-    if intent is None:
-        return None
-    if intent.get("remediation_requested") is True:
+    if intent is not None and intent.get("remediation_requested") is True:
         return None
     provenance = load_applied_provenance(project_id, work_unit_id)
     if provenance is None:
         return None
-    matched, reason = evaluate_recovery_lineage(workspace, project_id, work_unit_id, provenance)
+    matched, _reason = evaluate_recovery_lineage(workspace, project_id, work_unit_id, provenance)
     if not matched:
         return None
-    consume_recovery_intent(project_id, work_unit_id)
+    if intent is not None:
+        consume_recovery_intent(project_id, work_unit_id)
     tests = run_known_tests(workspace)
     runtime = runtime_checks(workspace)
     failure = None

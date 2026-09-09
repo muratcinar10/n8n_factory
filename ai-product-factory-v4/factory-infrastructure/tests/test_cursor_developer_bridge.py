@@ -510,6 +510,30 @@ class CursorBridgeContractTests(unittest.TestCase):
         self.assertEqual("WRITE", result["developer_action"])
         self.assertTrue(result["developer_write_required"])
 
+    def test_matching_trusted_provenance_skips_without_intent_file(self):
+        self._seed_committed_hangman()
+
+        def fake_invoke(_workspace, _prompt):
+            raise AssertionError("Cursor CLI must not run for trusted recovery")
+
+        with mock.patch.object(self.bridge, "invoke_cursor", side_effect=fake_invoke), mock.patch.object(
+            self.bridge,
+            "run_known_tests",
+            return_value={
+                "tests_executed": ["npm test"],
+                "test_commands": ["/usr/local/bin/npm test --silent"],
+                "test_exit_codes": [0],
+                "tests_passed": True,
+                "test_stdout_summary": "ok",
+                "test_stderr_summary": "",
+                "test_duration_ms": 4,
+            },
+        ):
+            result = self.bridge.execute_task(self.bridge.validate_payload(self.payload))
+        self.assertEqual("SKIP_ALREADY_APPLIED", result["developer_action"])
+        self.assertFalse(result["cursor_cli_invoked"])
+        self.assertTrue(result["tests_passed"])
+
     def test_remediation_intent_uses_developer_even_when_trusted(self):
         self._seed_committed_hangman()
         self.bridge.write_recovery_intent(
