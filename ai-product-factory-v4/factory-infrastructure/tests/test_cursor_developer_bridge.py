@@ -411,6 +411,7 @@ class CursorBridgeContractTests(unittest.TestCase):
 
     def test_content_hashes_detect_uncommitted_tracked_mutation(self):
         workspace = self._seed_committed_hangman()
+        self.bridge.provenance_path("PROJECT-HANGMAN-PILOT-001", "W001").unlink()
 
         def fake_invoke(ws, _prompt):
             (ws / "app.js").write_text('"use strict";\nchanged\n', encoding="utf-8")
@@ -428,6 +429,7 @@ class CursorBridgeContractTests(unittest.TestCase):
 
     def test_content_hashes_survive_transient_commit_and_head_restore(self):
         workspace = self._seed_committed_hangman()
+        self.bridge.provenance_path("PROJECT-HANGMAN-PILOT-001", "W001").unlink()
         original_head = self.bridge.git_head(workspace)
         restored = {}
 
