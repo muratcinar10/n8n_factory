@@ -403,7 +403,12 @@ def load_applied_provenance(project_id: str, work_unit_id: str) -> dict[str, obj
     return data
 
 
-def write_recovery_intent(project_id: str, work_unit_id: str) -> None:
+def write_recovery_intent(
+    project_id: str,
+    work_unit_id: str,
+    *,
+    remediation_requested: bool = False,
+) -> None:
     write_private_json(
         intent_path(project_id, work_unit_id),
         {
@@ -411,8 +416,26 @@ def write_recovery_intent(project_id: str, work_unit_id: str) -> None:
             "project_id": project_id,
             "work_unit_id": work_unit_id,
             "created_at_ms": utc_ms(),
+            "remediation_requested": remediation_requested is True,
         },
     )
+
+
+def peek_recovery_intent(project_id: str, work_unit_id: str) -> dict[str, object] | None:
+    path = intent_path(project_id, work_unit_id)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if data.get("mode") != RECOVERY_MODE:
+        return None
+    if data.get("project_id") != project_id or data.get("work_unit_id") != work_unit_id:
+        return None
+    return data
 
 
 def consume_recovery_intent(project_id: str, work_unit_id: str) -> dict[str, object] | None:
@@ -735,15 +758,130 @@ def invoke_cursor(workspace: Path, prompt: str) -> tuple[int, str, str, str | No
     return int(result.returncode), stdout, summary, failure
 
 
+def _result_payload(
+    *,
+    payload: dict[str, object],
+    started: int,
+    applied: bool,
+    changed: list[str],
+    diff: str,
+    tests: dict[str, object],
+    runtime: list[str],
+    exit_code: int | None,
+    summary: str,
+    failure: str | None,
+    recovery: dict[str, object],
+    developer_action: str,
+    developer_write_required: bool,
+) -> dict[str, object]:
+    recovery_verified = (
+        recovery.get("eligible") is True
+        and bool(tests["tests_executed"])
+        and tests["tests_passed"] is True
+        and failure is None
+        and (exit_code in {0, None} or developer_action == "SKIP_ALREADY_APPLIED")
+    )
+    completed = bool(applied or recovery_verified)
+    exit_ok = exit_code in {0, None} or developer_action == "SKIP_ALREADY_APPLIED"
+    return {
+        "developer": "CURSOR",
+        "developer_class": "APPLIED_DEVELOPER",
+        "project_id": payload["project_id"],
+        "work_unit_id": payload["work_unit_id"],
+        "implementation_applied": applied,
+        "changed_files": changed,
+        "diff_present": bool(diff),
+        "tests_executed": tests["tests_executed"],
+        "test_commands": tests["test_commands"],
+        "test_exit_codes": tests["test_exit_codes"],
+        "tests_passed": tests["tests_passed"],
+        "test_stdout_summary": tests["test_stdout_summary"],
+        "test_stderr_summary": tests["test_stderr_summary"],
+        "test_duration_ms": tests["test_duration_ms"],
+        "runtime_checks": runtime,
+        "cursor_exit_code": 0 if developer_action == "SKIP_ALREADY_APPLIED" else exit_code,
+        "cursor_cli_invoked": developer_action != "SKIP_ALREADY_APPLIED",
+        "developer_action": developer_action,
+        "developer_write_required": developer_write_required,
+        "execution_duration_ms": utc_ms() - started,
+        "developer_summary": summary[:2000],
+        "failure_class": failure,
+        "recovery_verification": recovery,
+        "status": "COMPLETED" if completed else "FAILED",
+        "task_completed": completed,
+        "ok": completed and exit_ok and failure is None,
+    }
+
+
+def attempt_skip_already_applied(
+    workspace: Path,
+    project_id: str,
+    work_unit_id: str,
+) -> dict[str, object] | None:
+    intent = peek_recovery_intent(project_id, work_unit_id)
+    if intent is None:
+        return None
+    if intent.get("remediation_requested") is True:
+        return None
+    provenance = load_applied_provenance(project_id, work_unit_id)
+    if provenance is None:
+        return None
+    matched, reason = evaluate_recovery_lineage(workspace, project_id, work_unit_id, provenance)
+    if not matched:
+        return None
+    consume_recovery_intent(project_id, work_unit_id)
+    tests = run_known_tests(workspace)
+    runtime = runtime_checks(workspace)
+    failure = None
+    if tests["tests_executed"] and not tests["tests_passed"]:
+        failure = "CURSOR_TEST_FAILURE"
+    elif not tests["tests_executed"]:
+        failure = "CURSOR_NO_APPLIED_CHANGE"
+    prior_files = [item for item in provenance.get("changed_files") or [] if isinstance(item, str)]
+    recovery = {
+        "eligible": failure is None,
+        "mode": RECOVERY_MODE if failure is None else None,
+        "prior_execution_id": str(provenance.get("prior_execution_id") or "") or None,
+        "prior_implementation_applied": provenance.get("implementation_applied") is True,
+        "prior_changed_files": prior_files,
+        "workspace_fingerprint_matched": True,
+        "reason": None if failure is None else failure,
+    }
+    return {
+        "tests": tests,
+        "runtime": runtime,
+        "failure": failure,
+        "recovery": recovery,
+        "summary": "SKIP_ALREADY_APPLIED: trusted applied provenance reused; developer write skipped",
+    }
+
+
 def execute_task(payload: dict[str, object]) -> dict[str, object]:
     started = utc_ms()
     project_id = str(payload["project_id"])
     work_unit_id = str(payload["work_unit_id"])
     workspace = trusted_workspace(project_id)
     ensure_repo(workspace)
-    prompt = build_prompt(payload)
-    before_hashes = workspace_content_fingerprints(workspace)
     with LOCK:
+        skipped = attempt_skip_already_applied(workspace, project_id, work_unit_id)
+        if skipped is not None:
+            return _result_payload(
+                payload=payload,
+                started=started,
+                applied=False,
+                changed=[],
+                diff="",
+                tests=skipped["tests"],
+                runtime=skipped["runtime"],
+                exit_code=0,
+                summary=str(skipped["summary"]),
+                failure=skipped["failure"],
+                recovery=skipped["recovery"],
+                developer_action="SKIP_ALREADY_APPLIED",
+                developer_write_required=False,
+            )
+        prompt = build_prompt(payload)
+        before_hashes = workspace_content_fingerprints(workspace)
         exit_code, _stdout, summary, failure = invoke_cursor(workspace, prompt)
     after_hashes = workspace_content_fingerprints(workspace)
     changed = content_changed_files(before_hashes, after_hashes)
@@ -774,39 +912,21 @@ def execute_task(payload: dict[str, object]) -> dict[str, object]:
                 failure = "CURSOR_NO_APPLIED_CHANGE"
         else:
             failure = "CURSOR_NO_APPLIED_CHANGE"
-    recovery_verified = (
-        recovery.get("eligible") is True
-        and bool(tests["tests_executed"])
-        and tests["tests_passed"] is True
-        and exit_code == 0
-        and failure is None
+    return _result_payload(
+        payload=payload,
+        started=started,
+        applied=applied,
+        changed=changed,
+        diff=diff,
+        tests=tests,
+        runtime=runtime,
+        exit_code=exit_code,
+        summary=summary,
+        failure=failure,
+        recovery=recovery,
+        developer_action="WRITE",
+        developer_write_required=True,
     )
-    completed = bool(applied or recovery_verified)
-    return {
-        "developer": "CURSOR",
-        "developer_class": "APPLIED_DEVELOPER",
-        "project_id": payload["project_id"],
-        "work_unit_id": payload["work_unit_id"],
-        "implementation_applied": applied,
-        "changed_files": changed,
-        "diff_present": bool(diff),
-        "tests_executed": tests["tests_executed"],
-        "test_commands": tests["test_commands"],
-        "test_exit_codes": tests["test_exit_codes"],
-        "tests_passed": tests["tests_passed"],
-        "test_stdout_summary": tests["test_stdout_summary"],
-        "test_stderr_summary": tests["test_stderr_summary"],
-        "test_duration_ms": tests["test_duration_ms"],
-        "runtime_checks": runtime,
-        "cursor_exit_code": exit_code,
-        "execution_duration_ms": utc_ms() - started,
-        "developer_summary": summary[:2000],
-        "failure_class": failure,
-        "recovery_verification": recovery,
-        "status": "COMPLETED" if completed else "FAILED",
-        "task_completed": completed,
-        "ok": completed and exit_code == 0 and failure is None,
-    }
 
 
 class CursorBridgeHandler(BaseHTTPRequestHandler):

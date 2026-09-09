@@ -267,12 +267,14 @@ class CursorBridgeContractTests(unittest.TestCase):
         def fake_invoke(_workspace, _prompt):
             return 0, '{"result":"no changes"}', "no changes", None
 
-        with mock.patch.object(self.bridge, "invoke_cursor", side_effect=fake_invoke):
+        with mock.patch.object(self.bridge, "invoke_cursor", side_effect=fake_invoke) as invoke:
             result = self.bridge.execute_task(self.bridge.validate_payload(self.payload))
+        invoke.assert_called_once()
+        self.assertEqual("WRITE", result["developer_action"])
         self.assertFalse(result["implementation_applied"])
         self.assertEqual([], result["tests_executed"])
         self.assertFalse(result["recovery_verification"]["eligible"])
-        self.assertIn(result["recovery_verification"]["reason"], {"fingerprint_mismatch", "git_head_mismatch"})
+        self.assertIn(result["recovery_verification"]["reason"], {"fingerprint_mismatch", "git_head_mismatch", "unrelated_workspace_mutation"})
         self.assertEqual("CURSOR_NO_APPLIED_CHANGE", result["failure_class"])
 
     def test_recovery_runs_allowlisted_tests_without_new_apply(self):
@@ -282,7 +284,7 @@ class CursorBridgeContractTests(unittest.TestCase):
         def fake_invoke(_workspace, _prompt):
             return 0, '{"result":"workspace already has W001"}', "workspace already has W001", None
 
-        with mock.patch.object(self.bridge, "invoke_cursor", side_effect=fake_invoke), mock.patch.object(
+        with mock.patch.object(self.bridge, "invoke_cursor", side_effect=fake_invoke) as invoke, mock.patch.object(
             self.bridge,
             "run_known_tests",
             return_value={
@@ -296,7 +298,11 @@ class CursorBridgeContractTests(unittest.TestCase):
             },
         ) as run_tests:
             result = self.bridge.execute_task(self.bridge.validate_payload(self.payload))
+        invoke.assert_not_called()
         run_tests.assert_called_once()
+        self.assertEqual("SKIP_ALREADY_APPLIED", result["developer_action"])
+        self.assertFalse(result["developer_write_required"])
+        self.assertFalse(result["cursor_cli_invoked"])
         self.assertFalse(result["implementation_applied"])
         self.assertEqual([], result["changed_files"])
         self.assertFalse(result["diff_present"])
@@ -493,6 +499,50 @@ class CursorBridgeContractTests(unittest.TestCase):
         )
         self.assertFalse(recovery["eligible"])
         self.assertEqual("prior_provenance_missing", recovery["reason"])
+
+    def test_no_provenance_uses_developer_write(self):
+        def fake_invoke(_workspace, _prompt):
+            return 0, '{"result":"new work"}', "new work", None
+
+        with mock.patch.object(self.bridge, "invoke_cursor", side_effect=fake_invoke) as invoke:
+            result = self.bridge.execute_task(self.bridge.validate_payload(self.payload))
+        invoke.assert_called_once()
+        self.assertEqual("WRITE", result["developer_action"])
+        self.assertTrue(result["developer_write_required"])
+
+    def test_remediation_intent_uses_developer_even_when_trusted(self):
+        self._seed_committed_hangman()
+        self.bridge.write_recovery_intent(
+            "PROJECT-HANGMAN-PILOT-001",
+            "W001",
+            remediation_requested=True,
+        )
+
+        def fake_invoke(_workspace, _prompt):
+            return 0, '{"result":"remediate"}', "remediate", None
+
+        with mock.patch.object(self.bridge, "invoke_cursor", side_effect=fake_invoke) as invoke:
+            result = self.bridge.execute_task(self.bridge.validate_payload(self.payload))
+        invoke.assert_called_once()
+        self.assertEqual("WRITE", result["developer_action"])
+
+    def test_skip_does_not_authorize_tests_when_file_mutated(self):
+        workspace = self._seed_committed_hangman()
+        self.bridge.write_recovery_intent("PROJECT-HANGMAN-PILOT-001", "W001")
+        (workspace / "app.js").write_text('"use strict";\nstale\n', encoding="utf-8")
+
+        def fake_invoke(_workspace, _prompt):
+            return 0, '{"result":"mismatch"}', "mismatch", None
+
+        with mock.patch.object(self.bridge, "invoke_cursor", side_effect=fake_invoke) as invoke, mock.patch.object(
+            self.bridge,
+            "run_known_tests",
+        ) as run_tests:
+            result = self.bridge.execute_task(self.bridge.validate_payload(self.payload))
+        invoke.assert_called_once()
+        run_tests.assert_not_called()
+        self.assertNotEqual("SKIP_ALREADY_APPLIED", result["developer_action"])
+        self.assertEqual([], result["tests_executed"])
 
 
 if __name__ == "__main__":
