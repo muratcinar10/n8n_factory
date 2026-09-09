@@ -10,6 +10,7 @@ services:
       - DB_POSTGRESDB_POOL_SIZE=10
       - DB_POSTGRESDB_MAX_CONNECTION_LIFETIME_MS=300000
       - N8N_RUNNERS_TASK_ACCEPT_TIMEOUT=10
+      - EXECUTIONS_DATA_SAVE_ON_PROGRESS=true
     volumes:
       - ./host-writer-runtime/inbox:/data/host-writer/inbox
       - ./host-writer-runtime/results:/data/host-writer/results:ro

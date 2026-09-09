@@ -7,11 +7,11 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "factory-js-runner-health-probe",
-        "responseMode": "lastNode",
+        "responseMode": "responseNode",
         "options": {}
       },
       "id": "probe-webhook",
-      "name": "Probe Webhook",
+      "name": "Director Sprint Input",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2.1,
       "position": [0, 0],
@@ -19,18 +19,31 @@
     },
     {
       "parameters": {
-        "jsCode": "return [{ json: { probe: 'ok', runner: 'js', ts: Date.now() } }];"
+        "jsCode": "return [{ json: { ...($input.first().json || {}), _historical_lessons_disabled: true, probe: 'prepare_ok' } }];"
       },
-      "id": "probe-code",
-      "name": "Code",
+      "id": "probe-prepare",
+      "name": "Prepare First-Cycle Context",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [220, 0]
+      "position": [240, 0]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "probe-respond",
+      "name": "Director Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [480, 0]
     }
   ],
   "connections": {
-    "Probe Webhook": {
-      "main": [[{ "node": "Code", "type": "main", "index": 0 }]]
+    "Director Sprint Input": {
+      "main": [[{ "node": "Prepare First-Cycle Context", "type": "main", "index": 0 }]]
+    },
+    "Prepare First-Cycle Context": {
+      "main": [[{ "node": "Director Webhook Response", "type": "main", "index": 0 }]]
     }
   },
   "settings": { "executionOrder": "v1" }
