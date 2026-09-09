@@ -1054,9 +1054,15 @@ def classify_result(result: dict[str, object]) -> tuple[str, str]:
         if isinstance(open_items, list) and open_items:
             first = open_items[0]
             if isinstance(first, dict):
-                deferred_reason = str(first.get("reason") or "")
+                deferred_reason = str(first.get("reason") or first.get("kind") or "")
             else:
                 deferred_reason = str(first)
+        if not deferred_reason:
+            backlog = report.get("REVIEW_BACKLOG")
+            if not isinstance(backlog, list):
+                backlog = result.get("REVIEW_BACKLOG") if isinstance(result.get("REVIEW_BACKLOG"), list) else []
+            if backlog and isinstance(backlog[0], dict):
+                deferred_reason = str(backlog[0].get("reason") or backlog[0].get("kind") or "")
         extra = f", deferred={deferred_reason}" if deferred_reason else ""
         return "NEEDS_REVIEW", f"Completion contract not met: status={status or 'UNKNOWN'}, qa={qa or 'UNKNOWN'}{extra}"
     if status == "COMPLETED":
@@ -1333,6 +1339,15 @@ def is_infrastructure_routing_review(unit: dict[str, object]) -> bool:
         )
         or cursor_unreachable
         or "cursor_no_applied_change" in blob
+        or "normalized analyst contract unavailable" in blob
+        or "role_contract_needs_review" in blob
+        or (
+            "completed_with_open_items" in blob
+            and unit.get("factory_execution_id")
+            and unit.get("inspector_score") is None
+            and not unit.get("meaningful_factory_attempt")
+            and "deferred=" not in blob
+        )
     )
 
 

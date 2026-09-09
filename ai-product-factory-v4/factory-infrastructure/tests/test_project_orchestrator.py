@@ -615,6 +615,9 @@ class OrchestratorTests(unittest.TestCase):
             "diagnosis": {"stage": "Product Factory"},
         }
         self.assertFalse(orchestrator.is_infrastructure_routing_review(hangman_style))
+        specialist_handoff = dict(hangman_style)
+        specialist_handoff["factory_execution_id"] = "125"
+        self.assertTrue(orchestrator.is_infrastructure_routing_review(specialist_handoff))
         deferred = dict(hangman_style)
         deferred["factory_execution_id"] = "99"
         deferred["last_error"] = "Completion contract not met: status=COMPLETED_WITH_OPEN_ITEMS, qa=NOT_VERIFIED, deferred=Developer pool exhausted after technical failure."
