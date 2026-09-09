@@ -627,6 +627,9 @@ class OrchestratorTests(unittest.TestCase):
         scored_qa_fail["inspector_score"] = 42
         scored_qa_fail["last_error"] = "Completion contract not met: status=COMPLETED_WITH_OPEN_ITEMS, qa=FAIL"
         self.assertFalse(orchestrator.is_infrastructure_routing_review(scored_qa_fail))
+        cursor_down = dict(scored_qa_fail)
+        cursor_down["last_error"] = "Cursor Developer: connect ECONNREFUSED 192.168.65.254:8766; Completion contract not met: status=COMPLETED_WITH_OPEN_ITEMS, qa=FAIL"
+        self.assertTrue(orchestrator.is_infrastructure_routing_review(cursor_down))
         chain = orchestrator.developer_chain_tr(
             "provider_not_found MODEL_UNAVAILABLE",
             {

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.product.factory.cursor-bridge</string>
+  <key>Program</key>
+  <string>/usr/bin/python3</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/muratcinar/Library/Application Support/ai-product-factory-v4/run_cursor_bridge.py</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/muratcinar/Library/Application Support/ai-product-factory-v4</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/muratcinar/Library/Application Support/ai-product-factory-v4/cursor-developer-bridge.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/muratcinar/Library/Application Support/ai-product-factory-v4/cursor-developer-bridge.log</string>
+</dict>
+</plist>

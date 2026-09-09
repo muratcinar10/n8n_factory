@@ -1283,12 +1283,20 @@ def is_unproven_transport_review(unit: dict[str, object]) -> bool:
 
 
 def is_infrastructure_routing_review(unit: dict[str, object]) -> bool:
-    if unit.get("status") != "NEEDS_REVIEW" or unit.get("qa_status") not in {None, "NOT_VERIFIED"}:
+    if unit.get("status") != "NEEDS_REVIEW":
         return False
     diagnosis = unit.get("diagnosis") if isinstance(unit.get("diagnosis"), dict) else {}
     stage = str(diagnosis.get("stage") or "")
     error = str(unit.get("last_error") or unit.get("outcome_summary") or "")
-    blob = f"{stage} {error} {diagnosis.get('last_success_stage') or ''} {diagnosis.get('expected_next_stage') or ''}".lower()
+    blob = f"{stage} {error} {diagnosis.get('last_success_stage') or ''} {diagnosis.get('expected_next_stage') or ''} {diagnosis.get('root_failure') or ''}".lower()
+    cursor_unreachable = (
+        "econnrefused" in blob
+        or "cursor_unavailable" in blob
+        or "cursor developer: connect" in blob
+    )
+    qa = unit.get("qa_status")
+    if qa not in {None, "NOT_VERIFIED"} and not (qa == "FAIL" and cursor_unreachable):
+        return False
     return (
         stage == "Provider Success Router"
         or "provider_role_unknown" in blob
@@ -1323,6 +1331,7 @@ def is_infrastructure_routing_review(unit: dict[str, object]) -> bool:
             and unit.get("inspector_score") is None
             and unit.get("qa_lead_status") in {None, "NOT_VERIFIED"}
         )
+        or cursor_unreachable
     )
 
 

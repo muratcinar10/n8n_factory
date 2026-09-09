@@ -40,8 +40,34 @@ start_service() {
 
 start_service director-bridge "$BASE_DIR/bridge/director_bridge.py"
 start_service factory-monitor "$BASE_DIR/monitor/factory_monitor.py"
-FACTORY_BRIDGE_TOKEN="$BRIDGE_TOKEN" start_service cursor-developer-bridge "$BASE_DIR/bridge/cursor_developer_bridge.py"
 printf 'FACTORY_CURSOR_BRIDGE_TOKEN=%s\n' "$BRIDGE_TOKEN" > "$RUNTIME_DIR/n8n-cursor.env"
+
+ensure_cursor_bridge_agent() {
+  uid=$(id -u)
+  domain="gui/$uid"
+  label="ai.product.factory.cursor-bridge"
+  support="$HOME/Library/Application Support/ai-product-factory-v4"
+  mkdir -p "$support" "$HOME/Library/LaunchAgents"
+  umask 077
+  printf '%s\n' "$BRIDGE_TOKEN" > "$support/bridge-token"
+  chmod 600 "$support/bridge-token"
+  cp "$BASE_DIR/launchd/run_cursor_bridge.py" "$support/run_cursor_bridge.py"
+  cp "$BASE_DIR/bridge/cursor_developer_bridge.py" "$support/cursor_developer_bridge.py"
+  cp "$BASE_DIR/launchd/ai.product.factory.cursor-bridge.plist" "$HOME/Library/LaunchAgents/${label}.plist"
+  if launchctl print "$domain/$label" >/dev/null 2>&1; then
+    if lsof -nP -iTCP:8766 -sTCP:LISTEN >/dev/null 2>&1; then
+      echo "cursor-developer-bridge LaunchAgent already running"
+      return
+    fi
+    launchctl kickstart -k "$domain/$label"
+    echo "cursor-developer-bridge LaunchAgent restarted"
+    return
+  fi
+  launchctl bootstrap "$domain" "$HOME/Library/LaunchAgents/${label}.plist"
+  echo "cursor-developer-bridge LaunchAgent loaded"
+}
+
+ensure_cursor_bridge_agent
 echo "Cursor Developer Bridge:             http://127.0.0.1:8766"
 echo "Director Control + Factory Monitor: http://127.0.0.1:${FACTORY_MONITOR_PORT}"
 echo "Director Bridge backend:            http://127.0.0.1:8765"
