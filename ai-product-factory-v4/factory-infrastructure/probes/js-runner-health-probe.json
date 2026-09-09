@@ -1,0 +1,37 @@
+{
+  "id": "FactoryJsRunnerHealthProbe",
+  "name": "Factory JS Runner Health Probe",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "factory-js-runner-health-probe",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "probe-webhook",
+      "name": "Probe Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [0, 0],
+      "webhookId": "factory-js-runner-health-probe"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { probe: 'ok', runner: 'js', ts: Date.now() } }];"
+      },
+      "id": "probe-code",
+      "name": "Code",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0]
+    }
+  ],
+  "connections": {
+    "Probe Webhook": {
+      "main": [[{ "node": "Code", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}
